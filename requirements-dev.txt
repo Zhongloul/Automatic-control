@@ -1,0 +1,5 @@
+-r requirements.txt
+pyinstaller>=6.0
+
+# 可选：dxcam 需要与你的 Python 版本匹配的 wheel，可提升截屏帧率
+# dxcam>=0.0.5

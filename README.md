@@ -93,6 +93,22 @@
 └── logs/                   运行日志
 ```
 
+## 从 GitHub 开发
+
+```bat
+git clone https://github.com/Zhongloul/Automatic-control.git
+cd Automatic-control
+python -m venv .venv
+.venv\Scripts\activate
+python -m pip install -r requirements.txt
+python gui.py
+```
+
+- 仓库只包含源码、配置模板、资源与测试；EXE、旧版本、录制会话、日志、截图和 build 产物不会提交。
+- 打包依赖：`python -m pip install -r requirements-dev.txt`，然后运行 `build_exe.bat`。
+- 自动验证：`python tools\self_test.py`、`python tools\replay_simulate_test.py`、`python tools\gui_smoke_test.py`。
+- 公开仓库可直接克隆、Fork 和提交 PR；如果要直接 push 到本仓库，需要仓库所有者在 Settings → Collaborators 里添加你，认证使用你自己的 GitHub 账号（SSH key 或浏览器登录/PAT），不需要共享别人的密钥。
+
 ## 环境要求
 
 - Windows 10/11
@@ -101,7 +117,7 @@
 - 游戏使用**窗口化或无边框窗口模式**，分辨率固定，运行期间不要缩放窗口
 - 不建议游戏被其他窗口完全遮挡；独占全屏大概率截不到画面
 
-可选：`python -m pip install dxcam` 可显著降低截屏耗时（如果你的 Python 版本有对应 wheel）。未安装时自动回退到 mss。
+可选：`python -m pip install dxcam` 可显著降低截屏耗时（如果你的 Python 版本有对应 wheel）。未安装时自动回退 GDI（不带 `CAPTUREBLT`，避免光标闪烁），再回退 mss。
 
 ## 快速开始（图形界面）
 
@@ -116,7 +132,7 @@
    - “场景模板”页：新增场景 → 从游戏画面抓取或导入图片 → 框选地图名/场景 UI → 保存并应用；
    - “跳转流程”页：新增跳转，填写起点/终点和动作，调整顺序，导入/导出 JSON；
    - 回到任务中心，选择“跨图导航”和目标场景，点击“开始任务”。
-7. 想录制手动操作：切到“录制回放”页，点“开始录制”（或 F6），倒计时后手动打副本；切图后按 F5 插入同步断点，按 F7 停止并保存。录制时会以 4 fps 自动保存画面，录制完可点“自动加断点”让工具分析空闲段并生成画面状态断点。选择会话后设置速度/循环/加载同步，点“开始回放”。
+7. 想录制手动操作：切到“录制回放”页，点“开始录制”（或 F6），倒计时后手动打副本；切图后按 F5 插入同步断点，按 F7 停止并保存。录制时会以 4 fps 自动保存画面，录制完可点“自动加断点”让工具分析空闲段并生成画面状态断点。选择会话后设置速度、循环次数（0=无限）、循环间隔和“断点后立即继续”，点“开始回放”。
 8. F8 开始/继续，F9 停止当前任务，F1 开关叠加层。日志在“实时监控”页，或写入 `logs/gui_*.log`。
 
 > 自动化发送按键时游戏必须在前台。图形界面可以放在第二块屏幕或后台运行，通过热键控制。
