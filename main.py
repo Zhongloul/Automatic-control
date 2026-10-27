@@ -34,7 +34,7 @@ def setup_logging(root):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="2D 横版动作游戏黑盒自动刷图脚本")
+    parser = argparse.ArgumentParser(description="通用窗口自动化控制台命令行入口")
     parser.add_argument("--config", default=None, help="配置文件路径，默认使用项目根目录 config.json")
     parser.add_argument("--title", default=None, help="临时覆盖窗口标题关键字")
     parser.add_argument("--class", dest="window_class", default=None, help="临时覆盖窗口类名关键字")
@@ -48,7 +48,7 @@ def parse_args():
 def countdown(logger, seconds):
     seconds = int(max(0, seconds))
     for remaining in range(seconds, 0, -1):
-        logger.info("%d 秒后开始，请切换到游戏窗口...", remaining)
+        logger.info("%d 秒后开始，请切换到目标窗口...", remaining)
         time.sleep(1.0)
 
 
@@ -70,7 +70,7 @@ def run(args):
 
     window = GameWindow(config["window"].get("title_keyword"), config["window"].get("class_keyword"))
     if not window.find():
-        logger.error("未找到游戏窗口。请在 config.json 的 window.title_keyword 中填写窗口标题关键字。")
+        logger.error("未找到目标窗口。请在 config.json 的 window.title_keyword 中填写窗口标题关键字。")
         logger.info("当前可见窗口（供参考）:")
         for info in list_windows()[:30]:
             logger.info("  %s | class=%s", info["title"], info["class"])
@@ -87,7 +87,7 @@ def run(args):
         time.sleep(0.05)
     frame = capture.latest()
     if frame is None:
-        logger.error("未捕获到游戏画面。请把游戏改成无边框窗口模式，并确认窗口未被最小化。")
+        logger.error("未捕获到目标画面。请把目标窗口改成无边框窗口模式，并确认窗口未被最小化。")
         capture.stop()
         source.close()
         return 1
@@ -166,7 +166,7 @@ def run(args):
                 if running:
                     running = False
                     inputs.release_all()
-                logger.warning("游戏窗口丢失，等待重新出现...")
+                logger.warning("目标窗口丢失，等待重新出现...")
                 debug.render(None, None, ["WINDOW LOST"])
                 time.sleep(0.4)
                 continue
@@ -185,7 +185,7 @@ def run(args):
                 inputs.release_all()
                 if not foreground_warned:
                     foreground_warned = True
-                    logger.warning("游戏不在前台，已自动暂停；切回游戏后按 %s 继续", toggle_key.upper())
+                    logger.warning("目标窗口不在前台，已自动暂停；切回目标窗口后按 %s 继续", toggle_key.upper())
             elif window.is_foreground():
                 foreground_warned = False
 

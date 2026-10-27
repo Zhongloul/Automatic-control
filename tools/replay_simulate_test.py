@@ -21,6 +21,7 @@ from src.session_store import (
     delete_session,
     list_sessions,
     load_events,
+    rename_session,
     save_events,
     write_meta,
 )
@@ -139,6 +140,55 @@ def test_session_store(root):
     check("session backup created", (folder / "events.jsonl.bak").is_file())
     delete_session(folder)
     check("session deleted", not folder.exists())
+
+
+def test_session_rename(root):
+    target = build_session(root)
+    source = create_session(
+        root,
+        {"window_title": "Fake Game", "client_size": [1280, 720], "keys": []},
+    )
+    branch_event = {
+        "t": 0.0,
+        "type": "checkpoint",
+        "name": "branch",
+        "cases": [{"source": "scene", "scene": "ok", "goto": {"session": target.name}}],
+        "default": {"goto": {"session": target.name}},
+    }
+    with open(source / "events.jsonl", "a", encoding="utf-8") as handle:
+        append_event(handle, branch_event)
+    new_path, updated = rename_session(target, "成功路径")
+    check("session rename path", new_path.is_dir() and not target.exists(), f"new={new_path}")
+    check("session rename references", updated == 2, f"updated={updated}")
+    renamed_events = load_events(source)
+    goto_values = []
+    if renamed_events:
+        event = renamed_events[0]
+        goto_values = [
+            case.get("goto", {}).get("session") for case in event.get("cases") or []
+        ]
+        goto_values.append(event.get("default", {}).get("goto", {}).get("session"))
+    check("session rename branch refs", goto_values == ["成功路径", "成功路径"], f"goto={goto_values}")
+    infos = list_sessions(root)
+    check(
+        "session rename listed",
+        any(info.name == "成功路径" for info in infos) and not any(info.name == target.name for info in infos),
+        f"names={[info.name for info in infos]}",
+    )
+    try:
+        rename_session(new_path, "bad/name")
+        rejected = False
+    except ValueError:
+        rejected = True
+    check("session rename invalid rejected", rejected)
+    try:
+        rename_session(new_path, source.name)
+        collision = False
+    except FileExistsError:
+        collision = True
+    check("session rename collision rejected", collision)
+    delete_session(new_path)
+    delete_session(source)
 
 
 def test_replay(root):
@@ -691,6 +741,7 @@ def main():
     root.mkdir(parents=True)
     try:
         test_session_store(root)
+        test_session_rename(root)
         test_replay(root)
         test_checkpoint_wait_scene(root)
         test_checkpoint_wait_visual_image(root)

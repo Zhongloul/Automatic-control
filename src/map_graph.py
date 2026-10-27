@@ -181,7 +181,7 @@ class TransitionExecutor:
             if self._aborted():
                 return False, "已中止"
             if not self.input.available():
-                return False, "输入被拦截：游戏窗口不在前台"
+                return False, "输入被拦截：目标窗口不在前台"
             try:
                 self._run_action(action)
             except Exception as exc:
@@ -219,7 +219,7 @@ class TransitionExecutor:
                 raise ValueError(f"点击坐标超出安全范围: {pos}")
             rect = self.client_rect_provider()
             if not rect:
-                raise RuntimeError("无法获取游戏窗口客户区")
+                raise RuntimeError("无法获取目标窗口客户区")
             left, top, right, bottom = rect
             x = int(left + rel_x * (right - left))
             y = int(top + rel_y * (bottom - top))
@@ -247,7 +247,7 @@ class TransitionExecutor:
             if not self.input.available():
                 return TransitionResult(
                     False,
-                    "输入被拦截：游戏窗口不在前台",
+                    "输入被拦截：目标窗口不在前台",
                     time.perf_counter() - start,
                     attempt,
                 )

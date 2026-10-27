@@ -8,7 +8,7 @@ import time
 import tkinter as tk
 import traceback
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 import cv2
 from PIL import Image, ImageTk
@@ -24,7 +24,7 @@ from src.replay import ReplayPlayer
 from src.replay_ui import CheckpointEditorWindow
 from src.scene import SceneRecognizer, list_markers, list_scene_ids
 from src.scene_ui import SceneManagerWindow
-from src.session_store import delete_session, list_sessions, load_events, sessions_dir
+from src.session_store import delete_session, list_sessions, load_events, rename_session, sessions_dir
 from src.ui_common import hide_window_if_testing
 from src.version import get_version
 from src.window import list_windows, set_dpi_awareness
@@ -41,38 +41,38 @@ DANGER = "#ff6b6b"
 FONT = "Microsoft YaHei UI"
 
 STEP_INFO = [
-    {"title": "HP 血条", "mode": "rect", "path": ("bars", "hp", "roi"),
-     "help": "在截图上拖拽框住 HP 血条，尽量只框住填充部分。"},
-    {"title": "MP 蓝条", "mode": "rect", "path": ("bars", "mp", "roi"),
-     "help": "拖拽框住 MP 蓝条；没有蓝条可以跳过此步。"},
-    {"title": "技能栏", "mode": "rect", "path": ("skills", "bar_roi"),
-     "help": "拖拽框住整条技能栏，之后按格数自动切分。"},
-    {"title": "角色位置", "mode": "point", "path": ("player", "anchor"),
-     "help": "单击角色身体中心，作为距离计算的参考点。"},
-    {"title": "敌人模板", "mode": "rect", "path": None, "template": True,
-     "help": "拖拽框住一个敌人精灵，确认后保存；可重复框选多个动作/朝向。"},
+    {"title": "状态条1", "mode": "rect", "path": ("bars", "hp", "roi"),
+     "help": "在截图上拖拽框住 状态条1，尽量只框住填充部分。"},
+    {"title": "状态条2", "mode": "rect", "path": ("bars", "mp", "roi"),
+     "help": "拖拽框住 状态条2；没有状态条可以跳过此步。"},
+    {"title": "快捷栏", "mode": "rect", "path": ("skills", "bar_roi"),
+     "help": "拖拽框住整条快捷栏，之后按格数自动切分。"},
+    {"title": "主体位置", "mode": "point", "path": ("player", "anchor"),
+     "help": "单击主体身体中心，作为距离计算的参考点。"},
+    {"title": "目标模板", "mode": "rect", "path": None, "template": True,
+     "help": "拖拽框住一个目标精灵，确认后保存；可重复框选多个动作/朝向。"},
 ]
 
 TASK_DEFS = [
     {
         "id": "combat",
-        "title": "自动战斗（单房间）",
-        "desc": "实时识别敌人，自动走位对齐、接近、释放技能/普攻、低血喝药和受击后撤。适合在单个房间刷怪。",
-        "steps": "使用步骤：锁定游戏窗口 → 校准 HP/技能栏/角色位置 → 抓敌人模板 → 点击“开始任务”并在倒计时内切回游戏。",
+        "title": "智能操作（单窗口）",
+        "desc": "实时识别目标，自动移动、接近、执行快捷操作，状态不足时恢复，受击时后撤。适合在单个窗口内重复执行操作。",
+        "steps": "使用步骤：锁定目标窗口 → 校准 状态条1/快捷栏/主体位置 → 抓目标模板 → 点击“开始任务”并在倒计时内切回目标窗口。",
         "implemented": True,
     },
     {
         "id": "route",
-        "title": "跨图导航",
-        "desc": "识别当前场景，按配置的跳转流程执行按键或点击，等待加载画面并确认目标场景。适合城镇→副本、房间→Boss 房。",
-        "steps": "使用步骤：先在“场景 / 流程管理”里添加场景标记并配置跳转 → 选择目标场景 → 点击“开始任务”。跨图任务需要关闭“仅观察”。",
+        "title": "流程导航",
+        "desc": "识别当前场景，按配置的跳转流程执行按键或点击，等待加载画面并确认目标场景。适合固定路线、场景切换和流程跳转。",
+        "steps": "使用步骤：先在“场景 / 流程管理”里添加场景标记并配置跳转 → 选择目标场景 → 点击“开始任务”。流程任务需要关闭“仅观察”。",
         "implemented": True,
     },
     {
         "id": "dungeon_loop",
-        "title": "自动刷副本（开发中）",
-        "desc": "清怪 → 找门 → 跳图 → 结算 → 自动重开。还需要房间清怪判定、门/结算识别和自动重开逻辑，当前版本未完成。",
-        "steps": "当前不可用。可先用“自动战斗”清理房间，再用“跨图导航”前往下一场景。",
+        "title": "循环流程（开发中）",
+        "desc": "清理目标 → 寻找出口 → 流程跳转 → 结算 → 自动重开。还需要目标清空判定、出口/结算识别和自动重开逻辑，当前版本未完成。",
+        "steps": "当前不可用。可先用“自动操作”清理目标，再用“流程导航”前往下一场景。",
         "implemented": False,
     },
     {
@@ -385,8 +385,8 @@ class CalibrationWindow(tk.Toplevel):
     def _draw_saved(self):
         self.canvas.delete("saved")
         specs = [
-            (("bars", "hp", "roi"), "#ffd166", "HP"),
-            (("bars", "mp", "roi"), "#4dabf7", "MP"),
+        (("bars", "hp", "roi"), "#ffd166", "状态1"),
+        (("bars", "mp", "roi"), "#4dabf7", "状态2"),
             (("skills", "bar_roi"), "#51cf66", "SKILLS"),
         ]
         for path, color, label in specs:
@@ -457,7 +457,7 @@ class CalibrationWindow(tk.Toplevel):
             path = folder / f"enemy_{index}.png"
             imwrite(path, crop)
             self.dirty = True
-            self.status_var.set(f"已保存敌人模板 {path.name}，可继续框选下一个敌人。")
+            self.status_var.set(f"已保存目标模板 {path.name}，可继续框选下一个目标。")
             self._clear_selection()
             return
 
@@ -465,7 +465,7 @@ class CalibrationWindow(tk.Toplevel):
             px, py = self.sel_point
             anchor = [round(px / self.frame_width, 5), round(py / self.frame_height, 5)]
             self.config["player"]["anchor"] = anchor
-            self.status_var.set(f"已记录角色锚点 {anchor}")
+            self.status_var.set(f"已记录主体锚点 {anchor}")
         else:
             x1, y1, x2, y2 = self._selection_rect()
             roi = [
@@ -661,7 +661,7 @@ class AutomationApp(tk.Tk):
         ttk.Label(title_row, text=f"自动化控制台 v{self.app_version}", style="Title.TLabel").pack(side="left")
         ttk.Label(title_row, textvariable=self.window_info_var, foreground=WARN).pack(side="right")
 
-        ttk.Label(header, text="游戏窗口标题").grid(row=1, column=0, sticky="w")
+        ttk.Label(header, text="目标窗口标题").grid(row=1, column=0, sticky="w")
         ttk.Entry(header, textvariable=self.title_var).grid(row=1, column=1, sticky="ew", padx=8)
         ttk.Button(header, text="枚举窗口", command=self._pick_window).grid(row=1, column=2, padx=(0, 6))
         ttk.Button(header, text="锁定窗口", command=self._lock_window).grid(row=1, column=3)
@@ -685,7 +685,7 @@ class AutomationApp(tk.Tk):
         self.preview_canvas.grid(row=0, column=0, sticky="nsew")
         ttk.Label(
             left,
-            text="提示：运行时请保持游戏窗口前台；F8 开始/继续，F9 暂停，F1 开关叠加层。",
+            text="提示：运行时请保持目标窗口前台；F8 开始/继续，F9 暂停，F1 开关叠加层。",
             style="Muted.TLabel",
         ).grid(row=1, column=0, sticky="w", pady=(6, 0))
 
@@ -701,10 +701,10 @@ class AutomationApp(tk.Tk):
         rows = [
             ("运行状态", self.run_state_var),
             ("截屏", self.capture_var),
-            ("HP", self.hp_var),
-            ("MP", self.mp_var),
-            ("敌人数量", self.enemies_var),
-            ("技能就绪", self.skills_var),
+        ("状态1", self.hp_var),
+        ("状态2", self.mp_var),
+            ("目标数量", self.enemies_var),
+            ("快捷项就绪", self.skills_var),
             ("当前场景", self.scene_var),
             ("当前动作", self.action_var),
         ]
@@ -831,11 +831,11 @@ class AutomationApp(tk.Tk):
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 4)
         )
         specs = [
-            ("window", "游戏窗口"),
-            ("hp", "HP 血条"),
-            ("player", "角色位置"),
-            ("enemies", "敌人模板"),
-            ("skills", "技能栏（建议）"),
+            ("window", "目标窗口"),
+            ("hp", "状态条1"),
+            ("player", "主体位置"),
+            ("enemies", "目标模板"),
+            ("skills", "快捷栏（建议）"),
             ("scenes", "场景模板"),
             ("flow", "跳转流程"),
         ]
@@ -850,7 +850,7 @@ class AutomationApp(tk.Tk):
 
         self.goal_frame = ttk.Frame(detail, style="Panel.TFrame")
         self.goal_frame.grid(row=4, column=0, sticky="ew", pady=(4, 6))
-        ttk.Label(self.goal_frame, text="跨图目标场景", style="Panel.TLabel").pack(side="left")
+        ttk.Label(self.goal_frame, text="流程导航目标场景", style="Panel.TLabel").pack(side="left")
         self.task_goal_combo = ttk.Combobox(
             self.goal_frame,
             textvariable=self.task_goal_var,
@@ -885,7 +885,7 @@ class AutomationApp(tk.Tk):
         )
         dark_checkbutton(
             buttons,
-            "仅观察（自动战斗有效，跨图任务需关闭）",
+            "仅观察（自动操作有效，流程任务需关闭）",
             self.dry_var,
             self._toggle_dry,
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
@@ -945,6 +945,15 @@ class AutomationApp(tk.Tk):
         )
         self.session_list.pack(fill="y", expand=True, pady=(6, 6))
         self.session_list.bind("<<ListboxSelect>>", self._on_session_select)
+        self.session_list.bind("<Double-Button-1>", self._rename_selected_session)
+        tk.Label(
+            left,
+            text="双击会话可重命名",
+            bg=PANEL,
+            fg=MUTED,
+            font=(FONT, 8),
+            anchor="w",
+        ).pack(fill="x", pady=(0, 4))
         session_buttons = ttk.Frame(left, style="Panel.TFrame")
         session_buttons.pack(fill="x")
         ttk.Button(session_buttons, text="刷新", command=self._refresh_sessions).grid(
@@ -987,7 +996,7 @@ class AutomationApp(tk.Tk):
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
         ttk.Label(
             record,
-            text="录制只采集游戏窗口前台时的键鼠；离开游戏会自动暂停。录制时自动保存画面（4 fps），停止后可用“自动加断点”生成画面状态同步。F6/F7 开始/停止，切图或采药后按 F5 插入同步断点。",
+            text="录制只采集目标窗口前台时的键鼠；离开目标窗口会自动暂停。录制时自动保存画面（4 fps），停止后可用“自动加断点”生成画面状态同步。F6/F7 开始/停止，切换或触发操作后按 F5 插入同步断点。",
             style="Panel.TLabel",
             wraplength=760,
             justify="left",
@@ -1142,6 +1151,39 @@ class AutomationApp(tk.Tk):
         if 0 <= index < len(self._session_infos):
             self._select_session(self._session_infos[index])
 
+    def _rename_selected_session(self, _event=None):
+        if self._task_running or self._replay_running or self.recorder is not None or self._record_pending:
+            messagebox.showwarning("占用中", "请先停止录制、回放或流程任务，再重命名会话。", parent=self)
+            return
+        selection = self.session_list.curselection()
+        if not selection:
+            messagebox.showinfo("提示", "请先选择一个会话", parent=self)
+            return
+        index = int(selection[0])
+        if not (0 <= index < len(self._session_infos)):
+            return
+        info = self._session_infos[index]
+        name = simpledialog.askstring(
+            "重命名会话",
+            "输入新的会话名称（分支目标会同步更新）：",
+            initialvalue=info.name,
+            parent=self,
+        )
+        if name is None:
+            return
+        name = name.strip()
+        if not name or name == info.name:
+            return
+        try:
+            new_path, updated = rename_session(info.path, name)
+        except Exception as exc:
+            messagebox.showerror("重命名失败", str(exc), parent=self)
+            return
+        self._log(f"会话已重命名: {info.name} → {new_path.name}")
+        if updated:
+            self._log(f"已同步更新 {updated} 处分支目标会话引用")
+        self._refresh_sessions(new_path)
+
     def _select_session(self, info):
         self.selected_session = info.path
         minutes = int(info.duration // 60)
@@ -1244,7 +1286,7 @@ class AutomationApp(tk.Tk):
 
     def _open_checkpoint_editor(self):
         if self._task_running or self._replay_running or self.recorder is not None or self._record_pending:
-            messagebox.showwarning("占用中", "请先停止录制、回放或跨图任务，再编辑断点。", parent=self)
+            messagebox.showwarning("占用中", "请先停止录制、回放或流程任务，再编辑断点。", parent=self)
             return
         if not self.selected_session:
             messagebox.showinfo("提示", "请先选择一个录制会话", parent=self)
@@ -1270,7 +1312,7 @@ class AutomationApp(tk.Tk):
 
     def _open_auto_analyzer(self):
         if self._task_running or self._replay_running or self.recorder is not None or self._record_pending:
-            messagebox.showwarning("占用中", "请先停止录制、回放或跨图任务，再分析会话。", parent=self)
+            messagebox.showwarning("占用中", "请先停止录制、回放或流程任务，再分析会话。", parent=self)
             return
         if not self.selected_session:
             messagebox.showinfo("提示", "请先选择一个录制会话", parent=self)
@@ -1315,23 +1357,23 @@ class AutomationApp(tk.Tk):
 
     def _start_recording(self):
         if self._replay_running or self._task_running:
-            messagebox.showwarning("占用中", "请先停止当前回放或跨图任务，再开始录制。", parent=self)
+            messagebox.showwarning("占用中", "请先停止当前回放或流程任务，再开始录制。", parent=self)
             return
         if self._record_pending or self.recorder is not None:
             return
         if not self.engine.active:
             self._rebuild_engine()
             if not self.engine.active:
-                messagebox.showerror("无法录制", self.engine.last_error or "未找到游戏窗口", parent=self)
+                messagebox.showerror("无法录制", self.engine.last_error or "未找到目标窗口", parent=self)
                 return
         countdown = max(0, int(self.config["safety"].get("countdown_s", 3)))
-        self.engine.request_pause("准备录制，自动战斗暂停")
-        self.engine.set_external_lock(True, "录制中，自动战斗暂停")
+        self.engine.request_pause("准备录制，自动操作暂停")
+        self.engine.set_external_lock(True, "录制中，自动操作暂停")
         self.engine.window.activate()
         self._record_pending = True
         self._record_countdown_end = time.perf_counter() + countdown
         self._record_message = ""
-        self.record_status_var.set(f"{countdown} 秒后开始录制，请切到游戏窗口")
+        self.record_status_var.set(f"{countdown} 秒后开始录制，请切到目标窗口")
         self._update_replay_ui()
         self._record_after_id = self.after(max(1, countdown) * 1000, self._begin_recording)
         self._log("录制: 倒计时开始")
@@ -1424,7 +1466,7 @@ class AutomationApp(tk.Tk):
             messagebox.showwarning("正在录制", "请先停止录制再回放。", parent=self)
             return
         if self._task_running:
-            messagebox.showwarning("占用中", "请先停止跨图任务再回放。", parent=self)
+            messagebox.showwarning("占用中", "请先停止流程任务再回放。", parent=self)
             return
         if self.dry_var.get():
             messagebox.showwarning("仅观察模式", "回放需要真实按键，请先关闭“仅观察”。", parent=self)
@@ -1440,10 +1482,10 @@ class AutomationApp(tk.Tk):
         if not self.engine.active:
             self._rebuild_engine()
             if not self.engine.active:
-                messagebox.showerror("无法回放", self.engine.last_error or "未找到游戏窗口", parent=self)
+                messagebox.showerror("无法回放", self.engine.last_error or "未找到目标窗口", parent=self)
                 return
         countdown = max(0, int(self.config["safety"].get("countdown_s", 3)))
-        self.engine.request_pause("回放任务，自动战斗暂停")
+        self.engine.request_pause("回放任务，自动操作暂停")
         self.engine.set_external_lock(True, "回放任务占用输入")
         self._replay_abort.clear()
         self._replay_running = True
@@ -1470,8 +1512,8 @@ class AutomationApp(tk.Tk):
                         self._replay_message = "回放已取消"
                         self._log_from_thread("回放已取消")
                         return
-                    self._replay_progress = f"倒计时 {remaining} 秒，请保持游戏前台"
-                    self._log_from_thread(f"回放 {remaining} 秒后开始，请保持游戏前台")
+                    self._replay_progress = f"倒计时 {remaining} 秒，请保持目标窗口前台"
+                    self._log_from_thread(f"回放 {remaining} 秒后开始，请保持目标窗口前台")
                     time.sleep(1.0)
                 engine.window.activate()
 
@@ -1541,10 +1583,10 @@ class AutomationApp(tk.Tk):
             return
         if self._record_pending:
             remaining = max(0, int(math.ceil(self._record_countdown_end - time.perf_counter())))
-            self.record_status_var.set(f"{remaining} 秒后开始录制，请切到游戏窗口")
+            self.record_status_var.set(f"{remaining} 秒后开始录制，请切到目标窗口")
         elif self.recorder is not None:
             status = self.recorder.status()
-            focus = "游戏前台" if status["focused"] else "游戏不在前台，录制暂停"
+            focus = "目标窗口前台" if status["focused"] else "目标窗口不在前台，录制暂停"
             self.record_status_var.set(
                 f"录制中 · {status['elapsed']:.1f}s · {status['event_count']} 事件 · "
                 f"{status.get('frame_count', 0)} 帧 · {focus}"
@@ -1718,12 +1760,12 @@ class AutomationApp(tk.Tk):
             missing = []
         elif task["id"] == "combat":
             if not window_ok:
-                missing.append("锁定游戏窗口")
+                missing.append("锁定目标窗口")
             if enemy_count == 0:
-                missing.append("抓取敌人模板")
+                missing.append("抓取目标模板")
         elif task["id"] == "route":
             if not window_ok:
-                missing.append("锁定游戏窗口")
+                missing.append("锁定目标窗口")
             if not markers:
                 missing.append("添加场景模板")
             if not transitions:
@@ -1736,7 +1778,7 @@ class AutomationApp(tk.Tk):
                 missing.append("关闭仅观察")
         elif task["id"] == "replay":
             if not window_ok:
-                missing.append("锁定游戏窗口")
+                missing.append("锁定目标窗口")
             if not session_ok:
                 missing.append("在录制回放页录制或选择会话")
             if self.dry_var.get():
@@ -1769,19 +1811,19 @@ class AutomationApp(tk.Tk):
         else:
             hint = "检查通过，可以开始。"
             if task["id"] == "combat" and not hp_ok:
-                hint += " 提示：HP 未校准，自动喝药和受击后撤不会生效。"
+                hint += " 提示：状态条1未校准，自动恢复和受击后撤不会生效。"
             if task["id"] == "combat" and not skills_ok:
-                hint += " 技能栏未校准，将仅按内置冷却释放技能。"
+                hint += " 快捷栏未校准，将仅按内置冷却执行快捷操作。"
             if task["id"] == "replay":
                 hint += " 可在“录制回放页”调整速度、循环次数和间隔。"
             if aux_busy:
-                hint += " 当前有录制/回放/跨图任务在运行，停止后才能开始。"
+                hint += " 当前有录制/回放/流程任务在运行，停止后才能开始。"
             self.task_hint_var.set(hint)
             self.task_hint_label.configure(fg=WARN if aux_busy or not hp_ok else ACCENT)
 
         if self._record_pending:
             remaining = max(0, int(math.ceil(self._record_countdown_end - time.perf_counter())))
-            self.task_status_var.set(f"录制倒计时 {remaining} 秒，请切到游戏窗口")
+            self.task_status_var.set(f"录制倒计时 {remaining} 秒，请切到目标窗口")
         elif self.recorder is not None:
             recorder_status = self.recorder.status()
             self.task_status_var.set(
@@ -1797,7 +1839,7 @@ class AutomationApp(tk.Tk):
             else:
                 self.task_status_var.set("请在“录制回放页”录制或选择会话")
         elif self._task_running:
-            self.task_status_var.set(f"跨图任务: {self._task_phase or '执行中'}")
+            self.task_status_var.set(f"流程任务: {self._task_phase or '执行中'}")
         elif self.current_task == "route" and self._task_message:
             self.task_status_var.set(self._task_message)
         elif self.current_task == "combat" and snapshot:
@@ -1806,13 +1848,13 @@ class AutomationApp(tk.Tk):
             enemy_count = len(state_data.get("enemies") or [])
             hp_text = "-" if hp is None else f"{hp:.2f}"
             if snapshot.get("pending"):
-                self.task_status_var.set(f"自动战斗倒计时 {math.ceil(snapshot.get('remaining', 0))} 秒")
+                self.task_status_var.set(f"自动操作倒计时 {math.ceil(snapshot.get('remaining', 0))} 秒")
             elif snapshot.get("running"):
-                self.task_status_var.set(f"自动战斗运行中 · HP {hp_text} · 敌人 {enemy_count}")
+                self.task_status_var.set(f"自动操作运行中 · HP {hp_text} · 目标 {enemy_count}")
             elif snapshot.get("active"):
-                self.task_status_var.set(f"自动战斗已暂停 · HP {hp_text} · 敌人 {enemy_count}")
+                self.task_status_var.set(f"自动操作已暂停 · HP {hp_text} · 目标 {enemy_count}")
             else:
-                self.task_status_var.set("未连接游戏窗口")
+                self.task_status_var.set("未连接目标窗口")
         elif self._task_message and self._task_message != self._shown_task_message:
             self.task_status_var.set(self._task_message)
             self._shown_task_message = self._task_message
@@ -1827,19 +1869,19 @@ class AutomationApp(tk.Tk):
             messagebox.showinfo("开发中", "该任务尚未实现。", parent=self)
             return
         if self._task_running or self._record_pending or self.recorder is not None or self._replay_running:
-            messagebox.showwarning("占用中", "当前有录制、回放或跨图任务在运行，请先停止。", parent=self)
+            messagebox.showwarning("占用中", "当前有录制、回放或流程任务在运行，请先停止。", parent=self)
             return
         if task["id"] == "combat":
             if not self.engine.active:
                 self._rebuild_engine()
                 if not self.engine.active:
-                    messagebox.showerror("无法启动", self.engine.last_error or "未找到游戏窗口", parent=self)
+                    messagebox.showerror("无法启动", self.engine.last_error or "未找到目标窗口", parent=self)
                     return
             self._task_message = ""
             self._shown_task_message = ""
             self.engine.request_start()
-            self.task_status_var.set("自动战斗已启动，请切回游戏窗口")
-            self._log("任务中心: 启动自动战斗")
+            self.task_status_var.set("自动操作已启动，请切回目标窗口")
+            self._log("任务中心: 启动自动操作")
             return
         if task["id"] == "route":
             goal = self.task_goal_var.get().strip()
@@ -1847,7 +1889,7 @@ class AutomationApp(tk.Tk):
                 messagebox.showwarning("缺少目标", "请先选择目标场景。", parent=self)
                 return
             if self.dry_var.get():
-                messagebox.showwarning("仅观察模式", "跨图任务需要真实按键，请先关闭“仅观察”。", parent=self)
+                messagebox.showwarning("仅观察模式", "流程任务需要真实按键，请先关闭“仅观察”。", parent=self)
                 return
             self._start_route_task(goal)
             return
@@ -1865,12 +1907,12 @@ class AutomationApp(tk.Tk):
         if self._task_running:
             return
         if self._record_pending or self.recorder is not None or self._replay_running:
-            messagebox.showwarning("占用中", "请先停止录制或回放，再启动跨图任务。", parent=self)
+            messagebox.showwarning("占用中", "请先停止录制或回放，再启动流程任务。", parent=self)
             return
         if not self.engine.active:
             self._rebuild_engine()
             if not self.engine.active:
-                messagebox.showerror("无法启动", self.engine.last_error or "未找到游戏窗口", parent=self)
+                messagebox.showerror("无法启动", self.engine.last_error or "未找到目标窗口", parent=self)
                 return
         recognizer = SceneRecognizer(self.config, self.root)
         graph = MapGraph(self.config)
@@ -1895,30 +1937,30 @@ class AutomationApp(tk.Tk):
         if goal not in recognizer.scene_ids:
             messagebox.showwarning("目标无效", f"目标场景 {goal} 没有可用模板。", parent=self)
             return
-        self.engine.request_pause("跨图任务，自动战斗暂停")
+        self.engine.request_pause("流程任务，自动操作暂停")
         self._task_abort.clear()
         self._task_running = True
         self._task_phase = "准备"
         self._task_message = ""
         self._shown_task_message = ""
-        self.task_status_var.set("跨图任务准备中...")
-        self._log(f"任务中心: 启动跨图导航 -> {goal}")
+        self.task_status_var.set("流程任务准备中...")
+        self._log(f"任务中心: 启动流程导航 -> {goal}")
         engine = self.engine
         config = self.config
         root = self.root
         abort = self._task_abort
-        engine.set_external_lock(True, "跨图任务占用输入，自动战斗暂停")
+        engine.set_external_lock(True, "流程任务占用输入，自动操作暂停")
 
         def worker():
             try:
                 engine.window.activate()
                 for remaining in range(3, 0, -1):
                     if abort.is_set():
-                        self._task_message = "跨图任务已停止"
-                        self._log_from_thread("跨图任务已停止")
+                        self._task_message = "流程任务已停止"
+                        self._log_from_thread("流程任务已停止")
                         return
                     self._task_phase = f"倒计时 {remaining} 秒"
-                    self._log_from_thread(f"跨图任务 {remaining} 秒后开始，请保持游戏在前台")
+                    self._log_from_thread(f"流程任务 {remaining} 秒后开始，请保持目标窗口在前台")
                     time.sleep(1.0)
                 engine.window.activate()
                 recognizer_local = SceneRecognizer(config, root)
@@ -1942,12 +1984,12 @@ class AutomationApp(tk.Tk):
                 )
                 self._task_phase = "执行中"
                 result = router.run_to(goal)
-                prefix = "跨图任务成功: " if result.success else "跨图任务失败: "
+                prefix = "流程任务成功: " if result.success else "流程任务失败: "
                 self._task_message = prefix + result.message
                 self._log_from_thread(self._task_message)
             except Exception as exc:
-                self._task_message = f"跨图任务异常: {exc}"
-                self._log_from_thread("跨图任务异常: " + traceback.format_exc(limit=2))
+                self._task_message = f"流程任务异常: {exc}"
+                self._log_from_thread("流程任务异常: " + traceback.format_exc(limit=2))
             finally:
                 engine.inputs.release_all()
                 engine.set_external_lock(False)
@@ -1964,9 +2006,9 @@ class AutomationApp(tk.Tk):
             self._stop_replay()
         if self._task_running:
             self._task_abort.set()
-            self._task_message = "正在停止跨图任务..."
+            self._task_message = "正在停止流程任务..."
             self._shown_task_message = ""
-            self._log("任务中心: 停止跨图任务")
+            self._log("任务中心: 停止流程任务")
         if self.engine is not None:
             self.engine.request_pause("任务中心暂停")
         if not self._task_running and not self._replay_running:
@@ -1974,7 +2016,7 @@ class AutomationApp(tk.Tk):
 
     def _open_scene_manager(self):
         if self._task_running or self._record_pending or self.recorder is not None or self._replay_running:
-            messagebox.showwarning("任务运行中", "请先停止录制、回放或跨图任务，再修改场景与流程。", parent=self)
+            messagebox.showwarning("任务运行中", "请先停止录制、回放或流程任务，再修改场景与流程。", parent=self)
             return
         try:
             if self._scene_manager is not None and self._scene_manager.winfo_exists():
@@ -2116,7 +2158,7 @@ class AutomationApp(tk.Tk):
                 canvas.create_text(
                     canvas_w // 2,
                     canvas_h // 2,
-                    text="未获取到游戏画面\n请锁定窗口，并确认游戏使用无边框窗口模式",
+                    text="未获取到目标画面\n请锁定窗口，并确认目标窗口使用无边框窗口模式",
                     fill="#77808f",
                     font=(FONT, 11),
                     justify="center",
@@ -2192,13 +2234,13 @@ class AutomationApp(tk.Tk):
             messagebox.showinfo("枚举窗口", "没有找到可见窗口", parent=self)
             return
         dialog = tk.Toplevel(self)
-        dialog.title("选择游戏窗口")
+        dialog.title("选择目标窗口")
         dialog.configure(bg=BG)
         dialog.geometry("680x460")
         dialog.transient(self)
         dialog.grab_set()
 
-        ttk.Label(dialog, text="双击选择游戏窗口", style="Muted.TLabel").pack(anchor="w", padx=12, pady=(10, 4))
+        ttk.Label(dialog, text="双击选择目标窗口", style="Muted.TLabel").pack(anchor="w", padx=12, pady=(10, 4))
         listbox = tk.Listbox(
             dialog,
             bg=FIELD,
@@ -2227,7 +2269,7 @@ class AutomationApp(tk.Tk):
     def _lock_window(self):
         title = self.title_var.get().strip()
         if not title:
-            messagebox.showwarning("提示", "请填写游戏窗口标题关键字，或点击“枚举窗口”选择。", parent=self)
+            messagebox.showwarning("提示", "请填写目标窗口标题关键字，或点击“枚举窗口”选择。", parent=self)
             return
         if self._task_running or self._record_pending or self.recorder is not None or self._replay_running:
             messagebox.showwarning("占用中", "请先停止录制、回放或任务，再重新锁定窗口。", parent=self)
@@ -2241,12 +2283,12 @@ class AutomationApp(tk.Tk):
         if self.engine is None:
             return
         if self._task_running or self._record_pending or self.recorder is not None or self._replay_running:
-            messagebox.showwarning("占用中", "请先停止录制、回放或跨图任务。", parent=self)
+            messagebox.showwarning("占用中", "请先停止录制、回放或流程任务。", parent=self)
             return
         if not self.engine.active:
             self._rebuild_engine()
             if not self.engine.active:
-                messagebox.showerror("无法启动", self.engine.last_error or "未找到游戏窗口", parent=self)
+                messagebox.showerror("无法启动", self.engine.last_error or "未找到目标窗口", parent=self)
                 return
         if self.engine.running or self.engine.pending_start:
             self.engine.request_pause("已暂停")
@@ -2260,7 +2302,7 @@ class AutomationApp(tk.Tk):
     def _toggle_dry(self):
         if self._task_running or self._replay_running or self.recorder is not None or self._record_pending:
             self.dry_var.set(not bool(self.dry_var.get()))
-            messagebox.showwarning("任务运行中", "请先停止录制、回放或跨图任务，再切换“仅观察”模式。", parent=self)
+            messagebox.showwarning("任务运行中", "请先停止录制、回放或流程任务，再切换“仅观察”模式。", parent=self)
             return
         value = bool(self.dry_var.get())
         if self.engine is not None:
@@ -2275,7 +2317,7 @@ class AutomationApp(tk.Tk):
             return
         frame = self.engine.snapshot().get("frame")
         if frame is None:
-            messagebox.showwarning("没有画面", "当前没有可保存的游戏画面。", parent=self)
+            messagebox.showwarning("没有画面", "当前没有可保存的目标画面。", parent=self)
             return
         folder = self.root / "captures"
         folder.mkdir(parents=True, exist_ok=True)
@@ -2289,7 +2331,7 @@ class AutomationApp(tk.Tk):
         snapshot = self.engine.snapshot()
         frame = snapshot.get("frame")
         if frame is None:
-            messagebox.showwarning("无法校准", "当前没有游戏画面，请先锁定窗口并确认预览正常。", parent=self)
+            messagebox.showwarning("无法校准", "当前没有目标画面，请先锁定窗口并确认预览正常。", parent=self)
             return
         if self.engine.running or self.engine.pending_start:
             self.engine.request_pause("打开校准工具，已暂停")

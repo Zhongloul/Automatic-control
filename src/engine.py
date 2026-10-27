@@ -58,7 +58,7 @@ class AutomationEngine:
             return True
         self.last_error = ""
         if not self.window.find():
-            self.last_error = "未找到游戏窗口，请检查窗口标题关键字"
+            self.last_error = "未找到目标窗口，请检查窗口标题关键字"
             self.log(self.last_error)
             return False
         try:
@@ -78,7 +78,7 @@ class AutomationEngine:
             while self.capture.latest() is None and time.perf_counter() < deadline:
                 time.sleep(0.05)
             if self.capture.latest() is None:
-                raise RuntimeError("未捕获到画面，请将游戏改为无边框窗口模式")
+                raise RuntimeError("未捕获到画面，请将目标窗口改为无边框窗口模式")
         except Exception as exc:
             self.last_error = str(exc)
             self.log(self.last_error)
@@ -123,14 +123,14 @@ class AutomationEngine:
 
     def request_start(self):
         if self._external_lock:
-            self.log("当前有跨图任务占用输入，无法启动自动战斗")
+            self.log("当前有流程任务占用输入，无法启动自动操作")
             return False
         if not self.active:
             if not self.start():
                 return False
         countdown = max(0.0, float(self.config["safety"].get("countdown_s", 3)))
         self._pending_start = time.perf_counter() + countdown
-        self.log(f"倒计时 {int(countdown)} 秒后开始，请切回游戏窗口")
+        self.log(f"倒计时 {int(countdown)} 秒后开始，请切回目标窗口")
         return True
 
     def request_pause(self, reason=""):
@@ -206,7 +206,7 @@ class AutomationEngine:
                     self._pending_start = 0.0
                     self.running = False
                     self.inputs.release_all()
-                    self.log("外部任务占用输入，已取消自动战斗启动")
+                    self.log("外部任务占用输入，已取消自动操作启动")
                 else:
                     self.window.activate()
                     self.brain.reset(now)
@@ -220,7 +220,7 @@ class AutomationEngine:
                     self.inputs.release_all()
                 if not lost_warned:
                     lost_warned = True
-                    self.log("游戏窗口丢失，等待重新出现")
+                    self.log("目标窗口丢失，等待重新出现")
                 time.sleep(0.3)
                 continue
             lost_warned = False
@@ -239,7 +239,7 @@ class AutomationEngine:
                 self.inputs.release_all()
                 if not foreground_warned:
                     foreground_warned = True
-                    self.log("游戏不在前台，已自动暂停")
+                    self.log("目标窗口不在前台，已自动暂停")
             elif self.window.is_foreground():
                 foreground_warned = False
 

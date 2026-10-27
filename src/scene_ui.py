@@ -195,7 +195,7 @@ class MarkerCaptureWindow(tk.Toplevel):
         ).grid(row=8, column=0, sticky="w", pady=(14, 0))
         ttk.Label(
             panel,
-            text="提示：标记要选地图名、场景 UI 等固定元素，不要选会消失的怪物或门。",
+            text="提示：标记要选场景名、场景 UI 等固定元素，不要选会消失的怪物或门。",
             style="Panel.TLabel",
             wraplength=290,
             justify="left",
@@ -628,7 +628,7 @@ class SceneManagerWindow(tk.Toplevel):
         tab.rowconfigure(1, weight=1)
         ttk.Label(
             tab,
-            text="步骤：新增场景 → 从游戏抓取或导入图片 → 框选稳定标记 → 保存并应用。子目录名就是场景 ID。",
+            text="步骤：新增场景 → 从目标窗口抓取或导入图片 → 框选稳定标记 → 保存并应用。子目录名就是场景 ID。",
             style="Panel.TLabel",
             wraplength=1000,
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
@@ -684,7 +684,7 @@ class SceneManagerWindow(tk.Toplevel):
 
         marker_buttons = ttk.Frame(right, style="Panel.TFrame")
         marker_buttons.grid(row=2, column=0, sticky="ew", pady=(0, 8))
-        ttk.Button(marker_buttons, text="从游戏画面抓取", command=self._capture_marker).pack(side="left")
+        ttk.Button(marker_buttons, text="从目标画面抓取", command=self._capture_marker).pack(side="left")
         ttk.Button(marker_buttons, text="导入图片", command=self._import_marker).pack(side="left", padx=6)
         ttk.Button(marker_buttons, text="删除标记", command=self._delete_marker).pack(side="left")
 
@@ -710,7 +710,7 @@ class SceneManagerWindow(tk.Toplevel):
         self.flow_enabled_var = tk.BooleanVar(value=bool(self.config["map_graph"].get("enabled", False)))
         dark_checkbutton(
             top,
-            "启用跳图",
+            "启用流程跳转",
             self.flow_enabled_var,
             self._toggle_flow_enabled,
         ).grid(row=0, column=1, padx=(12, 0))
@@ -827,7 +827,7 @@ class SceneManagerWindow(tk.Toplevel):
             self.preview_canvas.create_text(
                 canvas_w // 2,
                 canvas_h // 2,
-                text="暂无标记图片\n可“从游戏画面抓取”或“导入图片”",
+                text="暂无标记图片\n可“从目标画面抓取”或“导入图片”",
                 fill="#77808f",
                 font=(FONT, 10),
                 justify="center",
@@ -897,18 +897,18 @@ class SceneManagerWindow(tk.Toplevel):
         if not validate_scene_id(scene_id):
             messagebox.showerror("无效名称", "场景名不能为空，也不能包含 \\ / : * ? \" < > |", parent=self)
             return
-        self.status_var.set("正在抓取游戏画面...")
+        self.status_var.set("正在抓取目标画面...")
         self.update_idletasks()
         frame = self._acquire_frame()
         if frame is None:
-            self.status_var.set("抓取失败：请先锁定游戏窗口并确认预览正常")
-            messagebox.showwarning("没有画面", "当前没有游戏画面，请先在主界面锁定窗口。", parent=self)
+            self.status_var.set("抓取失败：请先锁定目标窗口并确认预览正常")
+            messagebox.showwarning("没有画面", "当前没有目标画面，请先在主界面锁定窗口。", parent=self)
             return
         window = MarkerCaptureWindow(
             self,
             frame,
             title=f"为场景 {scene_id} 抓取标记",
-            instruction="拖拽框住该场景稳定出现的元素（地图名/场景 UI），不要选怪物或门。",
+            instruction="拖拽框住该场景稳定出现的元素（场景名/场景 UI），不要选怪物或门。",
         )
         self.wait_window(window)
         if window.result is None:
@@ -991,7 +991,7 @@ class SceneManagerWindow(tk.Toplevel):
             return
         frame = self._acquire_frame()
         if frame is None:
-            messagebox.showwarning("没有画面", "当前没有游戏画面，请先在主界面锁定窗口。", parent=self)
+            messagebox.showwarning("没有画面", "当前没有目标画面，请先在主界面锁定窗口。", parent=self)
             return
         state = None
         for _ in range(max(1, recognizer.confirm_frames)):

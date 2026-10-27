@@ -435,9 +435,9 @@ class ReplayPlayer:
         if getattr(self.inputs, "dry_run", False):
             return ReplayResult(False, "仅观察模式下不能回放", 0, 0, 0.0)
         if not self._wait_foreground():
-            return ReplayResult(False, "等待游戏窗口前台超时", 0, 0, 0.0)
+            return ReplayResult(False, "等待目标窗口前台超时", 0, 0, 0.0)
         if not self.inputs.available():
-            return ReplayResult(False, "输入不可用：请关闭仅观察并保持游戏在前台", 0, 0, 0.0)
+            return ReplayResult(False, "输入不可用：请关闭仅观察并保持目标窗口在前台", 0, 0, 0.0)
         loops_label = "无限" if self.loops == 0 else f"{self.loops} 轮"
         self.log(
             f"开始回放 {self.session_folder} | {len(self.events)} 个事件 | {loops_label} | {self.speed:.2f}x"
@@ -458,7 +458,7 @@ class ReplayPlayer:
                     if gap > 0 and not self._sleep(gap):
                         break
                 if not self._wait_foreground():
-                    return ReplayResult(False, "回放中等待游戏前台超时", completed_loops, total_executed, time.perf_counter() - start)
+                    return ReplayResult(False, "回放中等待目标窗口前台超时", completed_loops, total_executed, time.perf_counter() - start)
                 if not self._load_session_events(root_folder):
                     return ReplayResult(False, "会话没有可回放事件", completed_loops, total_executed, time.perf_counter() - start)
                 branch_depth = 0
@@ -478,10 +478,10 @@ class ReplayPlayer:
                                 if not paused:
                                     paused = True
                                     self.inputs.release_all()
-                                    self.log("回放暂停：游戏窗口不在前台")
+                                    self.log("回放暂停：目标窗口不在前台")
                                 pause_start = time.perf_counter()
                                 if not self._wait_foreground():
-                                    return ReplayResult(False, "回放中等待游戏前台超时", completed_loops, total_executed, time.perf_counter() - start)
+                                    return ReplayResult(False, "回放中等待目标窗口前台超时", completed_loops, total_executed, time.perf_counter() - start)
                                 time_shift += time.perf_counter() - pause_start + 0.15
                                 self._restore_held_keys()
                                 paused = False

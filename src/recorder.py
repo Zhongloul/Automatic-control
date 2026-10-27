@@ -204,7 +204,7 @@ class InputRecorder:
                         self._release_all()
                     if not self._lost_logged:
                         self._lost_logged = True
-                        self.log("录制暂停：游戏窗口不在前台")
+                        self.log("录制暂停：目标窗口不在前台")
                 remaining = self.poll_interval - (time.perf_counter() - now)
                 time.sleep(max(0.001, remaining))
         except Exception as exc:

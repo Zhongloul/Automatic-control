@@ -772,6 +772,7 @@ class BranchEditorWindow(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._cancel)
         self._refresh_case_list()
         self._update_source_state()
+        self._update_target_hint()
 
     def _build_ui(self, data):
         self.columnconfigure(0, weight=1)
@@ -840,6 +841,17 @@ class BranchEditorWindow(tk.Toplevel):
         scroll.grid(row=0, column=1, sticky="ns")
         self.case_list.configure(yscrollcommand=scroll.set)
         self.case_list.bind("<<ListboxSelect>>", self._on_case_select)
+        self.case_hint_var = tk.StringVar(value="")
+        tk.Label(
+            left,
+            textvariable=self.case_hint_var,
+            bg=PANEL,
+            fg=MUTED,
+            anchor="w",
+            justify="left",
+            wraplength=360,
+            font=(FONT, 8),
+        ).grid(row=2, column=0, sticky="w", pady=(6, 0))
 
         right = ttk.Frame(body, style="Panel.TFrame", padding=10)
         right.grid(row=0, column=1, sticky="nsew")
@@ -899,15 +911,28 @@ class BranchEditorWindow(tk.Toplevel):
             state="readonly",
         )
         self.target_combo.grid(row=5, column=1, sticky="ew", pady=3)
+        self.target_hint_var = tk.StringVar(value="")
+        self.target_hint = tk.Label(
+            right,
+            textvariable=self.target_hint_var,
+            bg=PANEL,
+            fg=WARN,
+            anchor="w",
+            justify="left",
+            wraplength=360,
+            font=(FONT, 8),
+        )
+        self.target_hint.grid(row=6, column=0, columnspan=2, sticky="w")
 
         buttons = ttk.Frame(right, style="Panel.TFrame")
-        buttons.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        buttons.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         buttons.columnconfigure(0, weight=1)
         buttons.columnconfigure(1, weight=1)
         buttons.columnconfigure(2, weight=1)
-        ttk.Button(buttons, text="添加条件", style="Accent.TButton", command=self._add_case).grid(
-            row=0, column=0, sticky="ew", padx=(0, 4)
+        self.add_button = ttk.Button(
+            buttons, text="添加条件", style="Accent.TButton", command=self._add_case
         )
+        self.add_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
         ttk.Button(buttons, text="更新选中", command=self._update_case).grid(
             row=0, column=1, sticky="ew", padx=4
         )
@@ -922,9 +947,10 @@ class BranchEditorWindow(tk.Toplevel):
         footer.grid(row=3, column=0, sticky="ew")
         footer.columnconfigure(0, weight=1)
         footer.columnconfigure(1, weight=1)
-        ttk.Button(footer, text="保存分支", style="Accent.TButton", command=self._save).grid(
-            row=0, column=0, sticky="ew", padx=(0, 4)
+        self.save_button = ttk.Button(
+            footer, text="保存分支", style="Accent.TButton", command=self._save
         )
+        self.save_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
         ttk.Button(footer, text="取消", command=self._cancel).grid(
             row=0, column=1, sticky="ew", padx=(4, 0)
         )
@@ -968,6 +994,24 @@ class BranchEditorWindow(tk.Toplevel):
         self.case_list.delete(0, "end")
         for index, case in enumerate(self.cases, 1):
             self.case_list.insert("end", f"{index}. {self._format_case(case)}")
+        if self.cases:
+            self.case_hint_var.set(f"共 {len(self.cases)} 个条件，按顺序检查，命中第一个即切换会话。")
+        else:
+            self.case_hint_var.set(
+                "条件列表为空：填写右侧的来源、场景/参考图和目标会话，再点“添加条件”。"
+            )
+
+    def _update_target_hint(self):
+        if self.session_names:
+            self.target_hint.configure(fg=MUTED)
+            self.target_hint_var.set("目标会话必须是 sessions/ 下另一个已有事件的会话。")
+        else:
+            self.target_hint.configure(fg=WARN)
+            self.target_hint_var.set(
+                "没有其他会话可跳转：请先分别录制成功/失败路径，再回来配置分支。"
+            )
+            self.add_button.configure(state="disabled")
+            self.save_button.configure(state="disabled")
 
     def _format_case(self, case):
         goto = case.get("goto") if isinstance(case.get("goto"), dict) else case

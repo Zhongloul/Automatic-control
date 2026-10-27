@@ -111,8 +111,8 @@ def list_sessions(root):
     if not base.is_dir():
         return []
     infos = []
-    for folder in sorted(base.glob("replay_*"), reverse=True):
-        if not folder.is_dir():
+    for folder in base.iterdir():
+        if not folder.is_dir() or not (folder / "events.jsonl").is_file():
             continue
         meta = read_meta(folder)
         event_count = int(meta.get("event_count", 0) or 0)
@@ -133,7 +133,92 @@ def list_sessions(root):
                 keys=list(meta.get("keys") or []),
             )
         )
+    infos.sort(key=lambda info: (info.created_at, info.name), reverse=True)
     return infos
+
+
+def validate_session_name(name):
+    name = str(name or "").strip()
+    if not name:
+        return "名称不能为空"
+    if name in (".", ".."):
+        return "名称无效"
+    if any(character in name for character in '<>:"/\\|?*'):
+        return '名称不能包含 < > : " / \\ | ? *'
+    if name.endswith((" ", ".")):
+        return "名称不能以空格或点结尾"
+    if len(name) > 80:
+        return "名称不能超过 80 个字符"
+    reserved = {"CON", "PRN", "AUX", "NUL"}
+    reserved.update(f"COM{index}" for index in range(1, 10))
+    reserved.update(f"LPT{index}" for index in range(1, 10))
+    if name.split(".")[0].upper() in reserved:
+        return "名称不能使用 Windows 保留字"
+    return ""
+
+
+def _update_branch_references(base, old_name, new_name):
+    changed_files = 0
+    changed_refs = 0
+    for folder in Path(base).iterdir():
+        if not folder.is_dir() or not (folder / "events.jsonl").is_file():
+            continue
+        try:
+            events = load_events(folder)
+        except OSError:
+            continue
+        changed = 0
+        for event in events:
+            if str(event.get("name") or "").lower() != "branch":
+                continue
+            cases = event.get("cases")
+            if isinstance(cases, list):
+                for case in cases:
+                    if not isinstance(case, dict):
+                        continue
+                    goto = case.get("goto")
+                    if isinstance(goto, dict) and str(goto.get("session") or "") == old_name:
+                        goto["session"] = new_name
+                        changed += 1
+            default = event.get("default")
+            if isinstance(default, dict):
+                goto = default.get("goto") if isinstance(default.get("goto"), dict) else default
+                if str(goto.get("session") or "") == old_name:
+                    goto["session"] = new_name
+                    changed += 1
+        if changed:
+            try:
+                save_events(folder, events)
+            except OSError:
+                continue
+            changed_files += 1
+            changed_refs += changed
+    return changed_refs
+
+
+def rename_session(folder, new_name):
+    folder = Path(folder)
+    new_name = str(new_name or "").strip()
+    error = validate_session_name(new_name)
+    if error:
+        raise ValueError(error)
+    if not folder.is_dir():
+        raise FileNotFoundError(str(folder))
+    if folder.name == new_name:
+        return folder, 0
+    target = folder.parent / new_name
+    if target.exists():
+        raise FileExistsError(f"会话已存在: {new_name}")
+    old_name = folder.name
+    folder.rename(target)
+    meta = read_meta(target)
+    meta["name"] = new_name
+    try:
+        write_meta(target, meta)
+    except OSError:
+        pass
+    updated = _update_branch_references(target.parent, old_name, new_name)
+    return target, updated
 
 
 def delete_session(folder):
