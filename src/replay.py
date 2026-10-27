@@ -37,6 +37,7 @@ class ReplayPlayer:
         scene_checker=None,
         checkpoint_immediate=None,
         frame_getter=None,
+        session_callback=None,
     ):
         self.config = config
         self.window = window
@@ -52,6 +53,8 @@ class ReplayPlayer:
         self.event_callback = event_callback or (lambda *args: None)
         self.scene_checker = scene_checker
         self.frame_getter = frame_getter
+        self.session_callback = session_callback
+        self._last_branch_label = ""
         replay_cfg = config.get("replay") or {}
         configured_immediate = bool(replay_cfg.get("checkpoint_immediate", True))
         self.checkpoint_immediate = (
@@ -325,6 +328,7 @@ class ReplayPlayer:
         return path
 
     def _wait_branch_checkpoint(self, event):
+        self._last_branch_label = ""
         cases = event.get("cases")
         if not isinstance(cases, list) or not cases:
             return None, "分支断点缺少 cases"
@@ -416,6 +420,7 @@ class ReplayPlayer:
                     if folder is None:
                         return None, f"分支目标会话无效: {case['goto']}"
                     self.log(f"分支命中 {label} → {folder.name}")
+                    self._last_branch_label = label
                     return folder, ""
             if time.perf_counter() >= deadline:
                 default = event.get("default")
@@ -424,6 +429,7 @@ class ReplayPlayer:
                     folder = self._resolve_branch_target(goto)
                     if folder is not None:
                         self.log(f"分支超时，走默认路径 → {folder.name}")
+                        self._last_branch_label = "超时默认路径"
                         return folder, ""
                 return None, f"分支条件等待超时（{timeout:.1f}s）"
             time.sleep(min(self.state_poll_interval_s, 0.2))
@@ -461,6 +467,11 @@ class ReplayPlayer:
                     return ReplayResult(False, "回放中等待目标窗口前台超时", completed_loops, total_executed, time.perf_counter() - start)
                 if not self._load_session_events(root_folder):
                     return ReplayResult(False, "会话没有可回放事件", completed_loops, total_executed, time.perf_counter() - start)
+                if self.session_callback is not None:
+                    try:
+                        self.session_callback(str(root_folder), "")
+                    except Exception:
+                        pass
                 branch_depth = 0
                 while True:
                     schedule = self._schedule()
@@ -530,6 +541,13 @@ class ReplayPlayer:
                                         total_executed,
                                         time.perf_counter() - start,
                                     )
+                                if self.session_callback is not None:
+                                    try:
+                                        self.session_callback(
+                                            str(target_folder), self._last_branch_label
+                                        )
+                                    except Exception:
+                                        pass
                                 self.log(f"分支切换会话: {target_folder.name}")
                                 switched = True
                                 break

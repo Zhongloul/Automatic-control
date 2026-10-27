@@ -7,15 +7,9 @@ from PIL import Image, ImageTk
 
 from .analyzer import analyze_session, apply_suggestions
 from .keyframes import load_reference
+from .theme import ACCENT, BG, FG, FIELD, MUTED, PANEL, WARN
 from .ui_common import hide_window_if_testing
 
-BG = "#14161b"
-PANEL = "#1d2027"
-FIELD = "#11141a"
-FG = "#e8e8e8"
-MUTED = "#93a0b4"
-ACCENT = "#0fb98a"
-WARN = "#ffcc66"
 FONT = "Microsoft YaHei UI"
 
 

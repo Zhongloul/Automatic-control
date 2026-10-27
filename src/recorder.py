@@ -1,6 +1,7 @@
 import ctypes
 import threading
 import time
+from collections import deque
 from ctypes import wintypes
 from pathlib import Path
 
@@ -65,6 +66,7 @@ class InputRecorder:
         self.recording = False
         self.elapsed = 0.0
         self.event_count = 0
+        self._recent_events = deque(maxlen=200)
         self.focused = False
         self._key_state = {}
         self._mouse_state = {}
@@ -120,6 +122,7 @@ class InputRecorder:
         self._mouse_recorded = {button: False for button in MOUSE_VKS}
         self.elapsed = 0.0
         self.event_count = 0
+        self._recent_events.clear()
         self.focused = False
         self._last_mouse = None
         self._last_move_at = 0.0
@@ -169,6 +172,7 @@ class InputRecorder:
             "frame_count": self._frame_count,
             "focused": self.focused,
             "folder": self.folder.name if self.folder is not None else "",
+            "recent_events": list(self._recent_events)[-12:],
         }
 
     def _sample_frame(self):
@@ -249,6 +253,7 @@ class InputRecorder:
         event.update(fields)
         append_event(self._handle, event)
         self.event_count += 1
+        self._recent_events.append(dict(event))
         if (
             not self._suppress_sync_learning
             and kind in ACTION_TYPES

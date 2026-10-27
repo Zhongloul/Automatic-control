@@ -17,6 +17,7 @@ from src.replay_ui import CheckpointEditorWindow
 from src.scene import delete_scene, save_marker
 from src.scene_ui import SceneManagerWindow, TransitionEditorWindow
 from src.session_store import append_event, create_session, delete_session, write_meta
+from src.ui_common import icon_path
 from src.window import set_dpi_awareness
 
 
@@ -54,6 +55,7 @@ def main():
     set_dpi_awareness()
     app = gui.AutomationApp()
     assert not app.winfo_viewable(), "GUI smoke test must run hidden"
+    assert icon_path() is not None, "application icon missing"
     errors = []
 
     def report(exc, value, tb):
@@ -157,8 +159,44 @@ def main():
             on_saved=lambda: None,
         )
         assert len(editor._checkpoint_refs) == 1
+        original_count = len(editor.events)
+        editor._push_undo()
+        editor.events.append({"t": 9.0, "type": "checkpoint", "name": "sync"})
+        editor._refresh_event_list()
+        editor._refresh_checkpoint_list()
+        editor._undo()
+        assert len(editor.events) == original_count
+        editor._redo()
+        assert len(editor.events) == original_count + 1
+        editor._undo()
+        assert len(editor.events) == original_count
+        editor.event_list.selection_clear(0, "end")
+        editor.event_list.selection_set(1)
+        editor._on_event_select()
+        editor.time_var.set("0.500")
+        editor._auto_apply_time()
+        assert any(
+            event.get("type") == "key_down" and abs(float(event.get("t", 0)) - 0.5) < 1e-6
+            for event in editor.events
+        )
+        editor._undo()
+        assert any(
+            event.get("type") == "key_down" and abs(float(event.get("t", 0))) < 1e-6
+            for event in editor.events
+        )
+        before_create = len(editor.events)
+        editor._on_add_button()
+        assert len(editor.events) == before_create + 1
+        editor._undo()
+        assert len(editor.events) == before_create
+        editor._form_mode = "checkpoint"
+        editor._selected_event = None
+        editor.event_list.selection_clear(0, "end")
+        editor.checkpoint_list.selection_clear(0, "end")
+        editor._update_field_state()
         editor.type_var.set("branch")
         editor._update_field_state()
+        assert editor.type_label.winfo_manager() == "grid"
         assert editor.branch_label.winfo_manager() == "grid"
         assert editor.threshold_entry.winfo_manager() == ""
         editor._open_branch_editor()

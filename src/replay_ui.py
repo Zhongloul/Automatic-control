@@ -5,17 +5,10 @@ from tkinter import filedialog, messagebox, ttk
 
 from .scene import list_markers, list_scene_ids
 from .session_store import load_events, read_meta, save_events, write_meta
-from .session_trim import BOUNDARY_TYPES, trim_session
+from .session_trim import BOUNDARY_TYPES, trim_events, trim_frames
+from .theme import ACCENT, BG, DANGER, FG, FIELD, MUTED, PANEL, SELECT_FG, WARN
 from .ui_common import hide_window_if_testing
 
-BG = "#14161b"
-PANEL = "#1d2027"
-FIELD = "#11141a"
-FG = "#e8e8e8"
-MUTED = "#93a0b4"
-ACCENT = "#0fb98a"
-WARN = "#ffcc66"
-DANGER = "#ff6b6b"
 FONT = "Microsoft YaHei UI"
 
 CHECKPOINT_TYPES = ("sync", "wait_visual", "wait_seconds", "branch")
@@ -154,8 +147,23 @@ class CheckpointEditorWindow(tk.Toplevel):
         self.dirty = False
         self._checkpoint_refs = []
         self._selected_event = None
+        self._form_mode = "event"
         self.trim_head_var = tk.BooleanVar(value=True)
         self.trim_tail_var = tk.BooleanVar(value=True)
+        meta = read_meta(self.folder)
+        self._frame_start = 0.0
+        self._frame_end = float(meta.get("duration", 0.0) or 0.0)
+        if self._frame_end <= 0:
+            self._frame_end = max(
+                (float(event.get("t", 0.0) or 0.0) for event in self.events),
+                default=0.0,
+            )
+        self._frames_need_trim = False
+        self._undo_stack = []
+        self._redo_stack = []
+        self._saved_state = self._dirty_signature()
+        self._auto_job = None
+        self._suppress_auto = False
         self.scene_choices = [
             scene_id for scene_id in list_scene_ids(root) if list_markers(root, scene_id)
         ]
@@ -167,6 +175,9 @@ class CheckpointEditorWindow(tk.Toplevel):
         self.transient(master)
         self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.bind("<Control-z>", self._undo)
+        self.bind("<Control-y>", self._redo)
+        self.bind("<Control-Shift-Z>", self._redo)
 
     def _dark_check(self, parent, text, variable):
         return tk.Checkbutton(
@@ -195,7 +206,7 @@ class CheckpointEditorWindow(tk.Toplevel):
         )
         ttk.Label(
             head,
-            text="左侧可选择任意事件修改时间或删除；顶部可手动去头/去尾；右侧编辑同步断点。新增断点建议比目标事件晚 0.001~0.05 秒。",
+            text="左侧可选择任意事件修改时间或删除；顶部可手动去头/去尾（保存后生效）；右侧编辑同步断点。新增断点建议比目标事件晚 0.001~0.05 秒。Ctrl+Z 撤销，Ctrl+Y 重做。",
             style="Muted.TLabel",
             wraplength=1080,
             justify="left",
@@ -226,7 +237,9 @@ class CheckpointEditorWindow(tk.Toplevel):
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         left.columnconfigure(0, weight=1)
         left.rowconfigure(1, weight=1)
-        ttk.Label(left, text="时间线事件", style="Section.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(left, text="时间线事件（含录制开始/结束）", style="Section.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
         list_frame = ttk.Frame(left, style="Panel.TFrame")
         list_frame.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
         list_frame.columnconfigure(0, weight=1)
@@ -238,7 +251,7 @@ class CheckpointEditorWindow(tk.Toplevel):
             exportselection=False,
             fg=FG,
             selectbackground=ACCENT,
-            selectforeground="#08110d",
+            selectforeground=SELECT_FG,
             relief="flat",
             highlightthickness=0,
             activestyle="none",
@@ -268,7 +281,7 @@ class CheckpointEditorWindow(tk.Toplevel):
             exportselection=False,
             fg=FG,
             selectbackground=ACCENT,
-            selectforeground="#08110d",
+            selectforeground=SELECT_FG,
             relief="flat",
             highlightthickness=0,
             activestyle="none",
@@ -298,9 +311,13 @@ class CheckpointEditorWindow(tk.Toplevel):
 
         ttk.Label(form, text="时间(s)", style="Panel.TLabel").grid(row=0, column=0, sticky="w", pady=3)
         self.time_var = tk.StringVar(value="0.000")
-        ttk.Entry(form, textvariable=self.time_var).grid(row=0, column=1, sticky="ew", pady=3)
+        self.time_entry = ttk.Entry(form, textvariable=self.time_var)
+        self.time_entry.grid(row=0, column=1, sticky="ew", pady=3)
+        self.time_entry.bind("<Return>", self._auto_apply_time)
+        self.time_entry.bind("<FocusOut>", self._auto_apply_time)
 
-        ttk.Label(form, text="类型", style="Panel.TLabel").grid(row=1, column=0, sticky="w", pady=3)
+        self.type_label = ttk.Label(form, text="类型", style="Panel.TLabel")
+        self.type_label.grid(row=1, column=0, sticky="w", pady=3)
         self.type_var = tk.StringVar(value="sync")
         self.type_combo = ttk.Combobox(
             form,
@@ -309,7 +326,7 @@ class CheckpointEditorWindow(tk.Toplevel):
             state="readonly",
         )
         self.type_combo.grid(row=1, column=1, sticky="ew", pady=3)
-        self.type_combo.bind("<<ComboboxSelected>>", lambda _event: self._update_field_state())
+        self.type_combo.bind("<<ComboboxSelected>>", lambda _event: self._on_type_changed())
 
         self.source_label = ttk.Label(form, text="来源", style="Panel.TLabel")
         self.source_label.grid(row=2, column=0, sticky="w", pady=3)
@@ -321,19 +338,22 @@ class CheckpointEditorWindow(tk.Toplevel):
             state="readonly",
         )
         self.source_combo.grid(row=2, column=1, sticky="ew", pady=3)
-        self.source_combo.bind("<<ComboboxSelected>>", lambda _event: self._update_field_state())
+        self.source_combo.bind("<<ComboboxSelected>>", lambda _event: self._on_type_changed())
 
         self.scene_label = ttk.Label(form, text="场景 ID", style="Panel.TLabel")
         self.scene_label.grid(row=3, column=0, sticky="w", pady=3)
         self.scene_var = tk.StringVar(value="")
         self.scene_combo = ttk.Combobox(form, textvariable=self.scene_var, values=self.scene_choices, state="normal")
         self.scene_combo.grid(row=3, column=1, sticky="ew", pady=3)
+        self.scene_combo.bind("<<ComboboxSelected>>", lambda _event: self._schedule_checkpoint_apply())
 
         self.seconds_label = ttk.Label(form, text="等待秒数", style="Panel.TLabel")
         self.seconds_label.grid(row=4, column=0, sticky="w", pady=3)
         self.seconds_var = tk.StringVar(value="")
         self.seconds_entry = ttk.Entry(form, textvariable=self.seconds_var)
         self.seconds_entry.grid(row=4, column=1, sticky="ew", pady=3)
+        self.seconds_entry.bind("<Return>", self._schedule_checkpoint_apply)
+        self.seconds_entry.bind("<FocusOut>", self._schedule_checkpoint_apply)
 
         self.ref_label = ttk.Label(form, text="参考图", style="Panel.TLabel")
         self.ref_label.grid(row=5, column=0, sticky="w", pady=3)
@@ -343,6 +363,8 @@ class CheckpointEditorWindow(tk.Toplevel):
         self.ref_var = tk.StringVar(value="")
         self.ref_entry = ttk.Entry(self.ref_row, textvariable=self.ref_var)
         self.ref_entry.grid(row=0, column=0, sticky="ew")
+        self.ref_entry.bind("<Return>", self._schedule_checkpoint_apply)
+        self.ref_entry.bind("<FocusOut>", self._schedule_checkpoint_apply)
         self.ref_button = ttk.Button(self.ref_row, text="选择", command=self._choose_reference)
         self.ref_button.grid(row=0, column=1, padx=(6, 0))
 
@@ -351,6 +373,8 @@ class CheckpointEditorWindow(tk.Toplevel):
         self.threshold_var = tk.StringVar(value="0.10")
         self.threshold_entry = ttk.Entry(form, textvariable=self.threshold_var)
         self.threshold_entry.grid(row=6, column=1, sticky="ew", pady=3)
+        self.threshold_entry.bind("<Return>", self._schedule_checkpoint_apply)
+        self.threshold_entry.bind("<FocusOut>", self._schedule_checkpoint_apply)
 
         self.threshold_hint = tk.Label(
             form,
@@ -386,26 +410,27 @@ class CheckpointEditorWindow(tk.Toplevel):
         buttons.grid(row=4, column=0, sticky="ew", pady=(8, 0))
         buttons.columnconfigure(0, weight=1)
         buttons.columnconfigure(1, weight=1)
-        ttk.Button(buttons, text="新增断点", style="Accent.TButton", command=self._add_checkpoint).grid(
-            row=0, column=0, sticky="ew", padx=(0, 4)
+        self.add_button = ttk.Button(
+            buttons, text="新建断点", style="Accent.TButton", command=self._on_add_button
         )
-        ttk.Button(buttons, text="应用修改", command=self._apply_checkpoint).grid(
-            row=0, column=1, sticky="ew", padx=(4, 0)
+        self.add_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self.delete_button = ttk.Button(buttons, text="删除选中", command=self._delete_event)
+        self.delete_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        ttk.Button(buttons, text="保存会话", command=self._save_file).grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0)
         )
-        ttk.Button(buttons, text="更新时间", command=self._update_selected_time).grid(
-            row=1, column=0, sticky="ew", padx=(0, 4), pady=(6, 0)
-        )
-        ttk.Button(buttons, text="删除事件", command=self._delete_event).grid(
-            row=1, column=1, sticky="ew", padx=(4, 0), pady=(6, 0)
-        )
-        ttk.Button(buttons, text="写入会话", command=self._save_file).grid(
-            row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0)
-        )
-        ttk.Button(buttons, text="关闭", command=self._on_close).grid(
-            row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0)
-        )
+        tk.Label(
+            right,
+            text="时间、断点条件修改会自动更新左侧列表；“保存会话”才写入 events.jsonl。",
+            bg=PANEL,
+            fg=MUTED,
+            anchor="w",
+            justify="left",
+            wraplength=520,
+            font=(FONT, 8),
+        ).grid(row=5, column=0, sticky="w", pady=(8, 0))
 
-        self.status_var = tk.StringVar(value="修改后点“写入会话”保存，原文件会备份为 events.jsonl.bak")
+        self.status_var = tk.StringVar(value="修改会自动更新左侧列表；点“保存会话”写入文件，原文件备份为 events.jsonl.bak")
         tk.Label(
             right,
             textvariable=self.status_var,
@@ -415,13 +440,43 @@ class CheckpointEditorWindow(tk.Toplevel):
             justify="left",
             wraplength=520,
             font=(FONT, 9),
-        ).grid(row=5, column=0, sticky="w", pady=(8, 0))
+        ).grid(row=6, column=0, sticky="w", pady=(8, 0))
         self._update_field_state()
 
     def _source(self):
         return SOURCE_VALUES.get(self.source_var.get(), "image")
 
     def _update_field_state(self):
+        has_selection = self._selected_event is not None and any(
+            candidate is self._selected_event for candidate in self.events
+        )
+        self.delete_button.configure(state="normal" if has_selection else "disabled")
+        checkpoint_widgets = (
+            self.type_label,
+            self.type_combo,
+            self.source_label,
+            self.source_combo,
+            self.scene_label,
+            self.scene_combo,
+            self.seconds_label,
+            self.seconds_entry,
+            self.ref_label,
+            self.ref_row,
+            self.threshold_label,
+            self.threshold_entry,
+            self.threshold_hint,
+            self.branch_label,
+            self.branch_row,
+        )
+        if self._form_mode != "checkpoint":
+            for widget in checkpoint_widgets:
+                widget.grid_remove()
+            self.add_button.configure(text="新建断点")
+            return
+
+        self.type_label.grid()
+        self.type_combo.grid()
+        self.add_button.configure(text="新建断点")
         kind = self.type_var.get()
         branch = kind == "branch"
         visual = kind == "wait_visual"
@@ -485,15 +540,114 @@ class CheckpointEditorWindow(tk.Toplevel):
         )
         if path:
             self.ref_var.set(self._relative_ref(path))
+            self._schedule_checkpoint_apply()
+
+    def _dirty_signature(self):
+        return (
+            copy.deepcopy(self.events),
+            round(self._frame_start, 4),
+            round(self._frame_end, 4),
+            bool(self._frames_need_trim),
+        )
+
+    def _push_undo(self):
+        self._undo_stack.append(
+            {
+                "events": copy.deepcopy(self.events),
+                "frame_start": self._frame_start,
+                "frame_end": self._frame_end,
+                "frames_need_trim": self._frames_need_trim,
+                "branch_data": copy.deepcopy(self.branch_data),
+                "form_mode": self._form_mode,
+            }
+        )
+        if len(self._undo_stack) > 100:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
+
+    def _restore_undo_state(self, state):
+        self.events = copy.deepcopy(state.get("events") or [])
+        self._frame_start = float(state.get("frame_start", 0.0))
+        self._frame_end = float(state.get("frame_end", 0.0))
+        self._frames_need_trim = bool(state.get("frames_need_trim", False))
+        self.branch_data = copy.deepcopy(state.get("branch_data") or {})
+        self._form_mode = str(state.get("form_mode") or "event")
+        self._selected_event = None
+        self.selected_var.set("未选择事件")
+        self.time_var.set("0.000")
+        self.event_list.selection_clear(0, "end")
+        self.checkpoint_list.selection_clear(0, "end")
+        self._refresh_event_list()
+        self._refresh_checkpoint_list()
+        self._update_branch_summary()
+        self._update_field_state()
+        self.dirty = self._dirty_signature() != self._saved_state
+
+    def _undo(self, _event=None):
+        if not self._undo_stack:
+            self.status_var.set("没有可撤销的修改")
+            return "break"
+        self._redo_stack.append(
+            {
+                "events": copy.deepcopy(self.events),
+                "frame_start": self._frame_start,
+                "frame_end": self._frame_end,
+                "frames_need_trim": self._frames_need_trim,
+                "branch_data": copy.deepcopy(self.branch_data),
+                "form_mode": self._form_mode,
+            }
+        )
+        self._restore_undo_state(self._undo_stack.pop())
+        self.status_var.set(f"已撤销（Ctrl+Z），还可撤销 {len(self._undo_stack)} 步")
+        return "break"
+
+    def _redo(self, _event=None):
+        if not self._redo_stack:
+            self.status_var.set("没有可重做的修改")
+            return "break"
+        self._undo_stack.append(
+            {
+                "events": copy.deepcopy(self.events),
+                "frame_start": self._frame_start,
+                "frame_end": self._frame_end,
+                "frames_need_trim": self._frames_need_trim,
+                "branch_data": copy.deepcopy(self.branch_data),
+                "form_mode": self._form_mode,
+            }
+        )
+        if len(self._undo_stack) > 100:
+            self._undo_stack.pop(0)
+        self._restore_undo_state(self._redo_stack.pop())
+        self.status_var.set(f"已重做（Ctrl+Y），还可重做 {len(self._redo_stack)} 步")
+        return "break"
+
+    def _timeline_duration(self):
+        duration = max(0.0, self._frame_end - self._frame_start)
+        if self.events:
+            duration = max(
+                duration,
+                max(float(event.get("t", 0.0) or 0.0) for event in self.events),
+            )
+        return duration
 
     def _refresh_event_list(self):
         self.event_list.delete(0, "end")
+        duration = self._timeline_duration()
+        meta = read_meta(self.folder)
+        started = str(meta.get("created_at") or "").strip()
+        finished = str(meta.get("finished_at") or "").strip()
+        start_text = "录制开始" + (f" {started}" if started else "")
+        end_text = "录制结束" + (f" {finished}" if finished else "")
+        self.event_list.insert("end", f"{0.0:8.4f}  [{start_text}]")
         for event in self.events:
             detail = event_detail(event)
             self.event_list.insert(
                 "end",
-                f"{float(event.get('t', 0.0)):8.3f}  {str(event.get('type') or ''):<12} {detail}",
+                f"{float(event.get('t', 0.0)):8.4f}  {str(event.get('type') or ''):<12} {detail}",
             )
+        self.event_list.insert("end", f"{duration:8.4f}  [{end_text}]")
+        self.event_list.itemconfig(0, foreground=MUTED)
+        self.event_list.itemconfig("end", foreground=MUTED)
         self._update_trim_summary()
 
     def _refresh_checkpoint_list(self):
@@ -503,26 +657,43 @@ class CheckpointEditorWindow(tk.Toplevel):
         ]
         for event in self._checkpoint_refs:
             detail = event_detail(event)
-            self.checkpoint_list.insert("end", f"{float(event.get('t', 0.0)):8.3f}  {detail}")
+            self.checkpoint_list.insert("end", f"{float(event.get('t', 0.0)):8.4f}  {detail}")
 
     def _on_event_select(self, _event=None):
         selection = self.event_list.curselection()
         if not selection:
             return
-        index = int(selection[0])
-        if not (0 <= index < len(self.events)):
+        row = int(selection[0])
+        if row == 0:
+            self._selected_event = None
+            self._form_mode = "event"
+            self.checkpoint_list.selection_clear(0, "end")
+            self.selected_var.set("录制开始")
+            self._update_field_state()
+            self.status_var.set("录制开始（0.0000s）")
             return
-        event = self.events[index]
+        if row > len(self.events):
+            duration = self._timeline_duration()
+            self._selected_event = None
+            self._form_mode = "event"
+            self.checkpoint_list.selection_clear(0, "end")
+            self.selected_var.set("录制结束")
+            self._update_field_state()
+            self.status_var.set(f"录制结束（{duration:.4f}s）")
+            return
+        event = self.events[row - 1]
         self._selected_event = event
         self.selected_var.set(
-            f"选中事件: {float(event.get('t', 0.0)):.3f}s · {str(event.get('type') or '')} {event_detail(event)}"
+            f"选中事件: {float(event.get('t', 0.0)):.4f}s · {str(event.get('type') or '')} {event_detail(event)}"
         )
         self.time_var.set(f"{float(event.get('t', 0.0)):.4f}")
         if str(event.get("type") or "").lower() == "checkpoint":
             self._select_checkpoint_event(event)
         else:
+            self._form_mode = "event"
             self.checkpoint_list.selection_clear(0, "end")
-            self.status_var.set("已选择普通事件：修改时间后点“更新时间”，或点“删除事件”。")
+            self._update_field_state()
+            self.status_var.set("已选择普通事件：修改时间后按回车或点其他位置会自动更新。")
 
     def _on_checkpoint_select(self, _event=None):
         selection = self.checkpoint_list.curselection()
@@ -531,11 +702,12 @@ class CheckpointEditorWindow(tk.Toplevel):
         index = int(selection[0])
         if 0 <= index < len(self._checkpoint_refs):
             event = self._checkpoint_refs[index]
+            self._form_mode = "checkpoint"
             self._selected_event = event
             self._populate_form(event)
             self._select_event_object(event)
             self.selected_var.set(
-                f"选中断点: {float(event.get('t', 0.0)):.3f}s · {event_detail(event)}"
+                f"选中断点: {float(event.get('t', 0.0)):.4f}s · {event_detail(event)}"
             )
 
     def _select_checkpoint_event(self, event):
@@ -543,58 +715,71 @@ class CheckpointEditorWindow(tk.Toplevel):
             index = self._checkpoint_refs.index(event)
         except ValueError:
             return
+        self._form_mode = "checkpoint"
         self.checkpoint_list.selection_clear(0, "end")
         self.checkpoint_list.selection_set(index)
         self.checkpoint_list.see(index)
         self._selected_event = event
         self._populate_form(event)
         self.selected_var.set(
-            f"选中断点: {float(event.get('t', 0.0)):.3f}s · {event_detail(event)}"
+            f"选中断点: {float(event.get('t', 0.0)):.4f}s · {event_detail(event)}"
         )
 
     def _select_event_object(self, event):
         for index, candidate in enumerate(self.events):
             if candidate is event:
+                list_index = index + 1
                 self.event_list.selection_clear(0, "end")
-                self.event_list.selection_set(index)
-                self.event_list.see(max(0, index - 2))
+                self.event_list.selection_set(list_index)
+                self.event_list.see(max(0, list_index - 2))
                 self._selected_event = event
                 self.selected_var.set(
-                    f"选中事件: {float(event.get('t', 0.0)):.3f}s · {event_detail(event)}"
+                    f"选中事件: {float(event.get('t', 0.0)):.4f}s · {event_detail(event)}"
                 )
                 return
         self._selected_event = None
         self.selected_var.set("未选择事件")
 
     def _populate_form(self, event):
-        self.time_var.set(f"{float(event.get('t', 0.0)):.4f}")
-        name = str(event.get("name") or "sync").lower()
-        if name == "branch":
-            self.type_var.set("branch")
-            self.branch_data = copy.deepcopy(event)
-            self._update_branch_summary()
-        elif name in ("wait_scene", "wait_state", "wait_visual"):
-            source = str(event.get("source") or "").lower()
-            if name == "wait_scene" or source == "scene" or (not event.get("ref") and event.get("scene")):
-                source = "scene"
+        if self._auto_job is not None:
+            try:
+                self.after_cancel(self._auto_job)
+            except tk.TclError:
+                pass
+            self._auto_job = None
+        self._suppress_auto = True
+        try:
+            self._form_mode = "checkpoint"
+            self.time_var.set(f"{float(event.get('t', 0.0)):.4f}")
+            name = str(event.get("name") or "sync").lower()
+            if name == "branch":
+                self.type_var.set("branch")
+                self.branch_data = copy.deepcopy(event)
+                self._update_branch_summary()
+            elif name in ("wait_scene", "wait_state", "wait_visual"):
+                source = str(event.get("source") or "").lower()
+                if name == "wait_scene" or source == "scene" or (not event.get("ref") and event.get("scene")):
+                    source = "scene"
+                else:
+                    source = "image"
+                self.type_var.set("wait_visual")
+                self.source_var.set(SOURCE_LABELS[source])
             else:
-                source = "image"
-            self.type_var.set("wait_visual")
-            self.source_var.set(SOURCE_LABELS[source])
-        else:
-            if name not in CHECKPOINT_TYPES:
-                name = "sync"
-            self.type_var.set(name)
-        if self.type_var.get() != "branch":
-            self.branch_data = {}
-            self._update_branch_summary()
-        self.scene_var.set(str(event.get("scene") or ""))
-        seconds = event.get("seconds")
-        self.seconds_var.set("" if seconds is None else str(seconds))
-        self.ref_var.set(str(event.get("ref") or ""))
-        threshold = event.get("threshold")
-        self.threshold_var.set("0.10" if threshold is None else str(threshold))
-        self._update_field_state()
+                if name not in CHECKPOINT_TYPES:
+                    name = "sync"
+                self.type_var.set(name)
+            if self.type_var.get() != "branch":
+                self.branch_data = {}
+                self._update_branch_summary()
+            self.scene_var.set(str(event.get("scene") or ""))
+            seconds = event.get("seconds")
+            self.seconds_var.set("" if seconds is None else str(seconds))
+            self.ref_var.set(str(event.get("ref") or ""))
+            threshold = event.get("threshold")
+            self.threshold_var.set("0.10" if threshold is None else str(threshold))
+            self._update_field_state()
+        finally:
+            self._suppress_auto = False
 
     def _update_branch_summary(self):
         cases = self.branch_data.get("cases") if isinstance(self.branch_data, dict) else None
@@ -628,6 +813,75 @@ class CheckpointEditorWindow(tk.Toplevel):
     def _on_branch_saved(self, data):
         self.branch_data = copy.deepcopy(data)
         self._update_branch_summary()
+        self._schedule_checkpoint_apply()
+
+    def _on_type_changed(self):
+        self._update_field_state()
+        self._schedule_checkpoint_apply()
+
+    def _schedule_checkpoint_apply(self, _event=None):
+        if self._suppress_auto or self._form_mode != "checkpoint":
+            return
+        if self._selected_checkpoint() is None:
+            return
+        if self._auto_job is not None:
+            try:
+                self.after_cancel(self._auto_job)
+            except tk.TclError:
+                pass
+        self._auto_job = self.after(150, self._auto_apply_checkpoint)
+
+    def _auto_apply_time(self, _event=None):
+        if self._suppress_auto:
+            return
+        event = self._selected_event
+        if event is None or not any(candidate is event for candidate in self.events):
+            return
+        try:
+            time_value = float(self.time_var.get())
+        except ValueError:
+            self.status_var.set("时间无效，未更新")
+            return
+        if time_value < 0:
+            self.status_var.set("时间不能为负数")
+            return
+        if str(event.get("type") or "").lower() == "checkpoint":
+            self._auto_apply_checkpoint()
+            return
+        if abs(float(event.get("t", 0.0) or 0.0) - round(time_value, 4)) < 1e-9:
+            return
+        self._push_undo()
+        event["t"] = round(time_value, 4)
+        self.events.sort(key=lambda item: float(item.get("t", 0.0)))
+        self.dirty = True
+        self._refresh_event_list()
+        self._refresh_checkpoint_list()
+        self._select_event_object(event)
+        self.time_var.set(f"{event['t']:.4f}")
+        self.status_var.set("事件时间已自动更新（保存会话后写入文件）")
+
+    def _auto_apply_checkpoint(self):
+        self._auto_job = None
+        if self._suppress_auto or self._form_mode != "checkpoint":
+            return
+        current = self._selected_checkpoint()
+        if current is None:
+            return
+        event, error = self._build_checkpoint()
+        if event is None:
+            self.status_var.set(f"断点配置未更新: {error}")
+            return
+        if current == event:
+            return
+        self._push_undo()
+        current.clear()
+        current.update(event)
+        self.events.sort(key=lambda item: float(item.get("t", 0.0)))
+        self.dirty = True
+        self._refresh_event_list()
+        self._refresh_checkpoint_list()
+        self._select_checkpoint_event(current)
+        self.status_var.set("断点修改已自动更新（保存会话后写入文件）")
 
     def _selected_checkpoint(self):
         selection = self.checkpoint_list.curselection()
@@ -694,11 +948,26 @@ class CheckpointEditorWindow(tk.Toplevel):
                 event["default"] = copy.deepcopy(default)
         return event, ""
 
+    def _on_add_button(self):
+        if self._form_mode != "checkpoint":
+            self._form_mode = "checkpoint"
+            self.type_var.set("sync")
+            self.branch_data = {}
+            self.scene_var.set("")
+            self.seconds_var.set("")
+            self.ref_var.set("")
+            self.threshold_var.set("0.10")
+            self._update_branch_summary()
+            self._update_field_state()
+        self._add_checkpoint()
+
     def _add_checkpoint(self):
+        self._form_mode = "checkpoint"
         event, error = self._build_checkpoint()
         if event is None:
             messagebox.showerror("断点无效", error, parent=self)
             return
+        self._push_undo()
         self.events.append(event)
         self.events.sort(key=lambda item: float(item.get("t", 0.0)))
         self.dirty = True
@@ -706,9 +975,10 @@ class CheckpointEditorWindow(tk.Toplevel):
         self._refresh_checkpoint_list()
         self._select_checkpoint_event(event)
         self._select_event_object(event)
-        self.status_var.set("已添加断点（尚未写入文件）")
+        self.status_var.set("已添加断点（尚未保存）")
 
     def _apply_checkpoint(self):
+        self._form_mode = "checkpoint"
         current = self._selected_checkpoint()
         if current is None:
             messagebox.showinfo("提示", "请先在断点列表中选择一个断点", parent=self)
@@ -717,6 +987,7 @@ class CheckpointEditorWindow(tk.Toplevel):
         if event is None:
             messagebox.showerror("断点无效", error, parent=self)
             return
+        self._push_undo()
         current.clear()
         current.update(event)
         self.events.sort(key=lambda item: float(item.get("t", 0.0)))
@@ -725,7 +996,7 @@ class CheckpointEditorWindow(tk.Toplevel):
         self._refresh_checkpoint_list()
         self._select_checkpoint_event(current)
         self._select_event_object(current)
-        self.status_var.set("已修改断点（尚未写入文件）")
+        self.status_var.set("已修改断点（尚未保存）")
 
     def _update_selected_time(self):
         event = self._selected_event
@@ -740,7 +1011,13 @@ class CheckpointEditorWindow(tk.Toplevel):
         if time_value < 0:
             messagebox.showerror("时间无效", "时间不能为负数", parent=self)
             return
+        self._push_undo()
         event["t"] = round(time_value, 4)
+        self._form_mode = (
+            "checkpoint"
+            if str(event.get("type") or "").lower() == "checkpoint"
+            else "event"
+        )
         self.events.sort(key=lambda item: float(item.get("t", 0.0)))
         self.dirty = True
         self._refresh_event_list()
@@ -748,7 +1025,10 @@ class CheckpointEditorWindow(tk.Toplevel):
         self._select_event_object(event)
         if str(event.get("type") or "").lower() == "checkpoint":
             self._select_checkpoint_event(event)
-        self.status_var.set("已修改事件时间（尚未写入会话）")
+        else:
+            self.checkpoint_list.selection_clear(0, "end")
+            self._update_field_state()
+        self.status_var.set("已修改事件时间（尚未保存）")
 
     def _delete_event(self):
         event = self._selected_event
@@ -757,13 +1037,16 @@ class CheckpointEditorWindow(tk.Toplevel):
             return
         if not messagebox.askyesno("删除事件", "确定删除选中的事件？", parent=self):
             return
+        self._push_undo()
         self.events.remove(event)
         self._selected_event = None
+        self._form_mode = "event"
         self.selected_var.set("未选择事件")
         self.dirty = True
         self._refresh_event_list()
         self._refresh_checkpoint_list()
-        self.status_var.set("已删除事件（尚未写入会话）")
+        self._update_field_state()
+        self.status_var.set("已删除事件（尚未保存）")
 
     def _apply_trim(self):
         head = bool(self.trim_head_var.get())
@@ -771,48 +1054,37 @@ class CheckpointEditorWindow(tk.Toplevel):
         if not head and not tail:
             messagebox.showinfo("裁剪", "请至少勾选“去头”或“去尾”", parent=self)
             return
-        if self.dirty:
-            if not messagebox.askyesno(
-                "先写入",
-                "当前修改尚未写入会话，是否先写入再裁剪？",
-                parent=self,
-            ):
-                return
-            if not self._save_file(quiet=True):
-                return
-        meta = read_meta(self.folder)
-        total = float(meta.get("duration", 0.0) or 0.0)
+        total = max(0.0, self._frame_end - self._frame_start)
         max_event = max((float(event.get("t", 0.0) or 0.0) for event in self.events), default=0.0)
-        if total <= 0:
-            total = max_event
-        try:
-            stats = trim_session(
-                self.folder,
-                trim_head=head,
-                trim_tail=tail,
-                total_elapsed=total,
-            )
-        except Exception as exc:
-            messagebox.showerror("裁剪失败", str(exc), parent=self)
+        if total <= 0 or max_event > total:
+            total = max(total, max_event)
+        result = trim_events(
+            self.events,
+            trim_head=head,
+            trim_tail=tail,
+            total_elapsed=total,
+        )
+        if not result["trimmed"]:
+            self.status_var.set("没有可裁剪的内容（可能没有键鼠操作）")
             return
-        self.events = load_events(self.folder)
-        self.events.sort(key=lambda event: float(event.get("t", 0.0)))
+        self._push_undo()
+        self._frame_start += float(result["start"])
+        self._frame_end = self._frame_start + float(result["duration"])
+        self._frames_need_trim = True
+        self.events = result["events"]
         self._selected_event = None
+        self._form_mode = "event"
         self.selected_var.set("未选择事件")
-        self.dirty = False
+        self.dirty = True
         self._refresh_event_list()
         self._refresh_checkpoint_list()
+        self._update_field_state()
         self.event_list.selection_clear(0, "end")
         self.checkpoint_list.selection_clear(0, "end")
-        if stats.get("trimmed"):
-            self.status_var.set(
-                f"裁剪完成：去头 {stats.get('offset', 0.0):.2f}s，"
-                f"去尾 {stats.get('tail', 0.0):.2f}s，剩余 {stats.get('duration', 0.0):.2f}s"
-            )
-        else:
-            self.status_var.set("没有可裁剪的内容（可能没有键鼠操作）")
-        if self.on_saved is not None:
-            self.on_saved()
+        self.status_var.set(
+            f"已裁剪（仅当前列表）：去头 {result['start']:.2f}s，"
+            f"去尾 {total - result['end']:.2f}s，剩余 {result['duration']:.2f}s；点“保存会话”后生效"
+        )
 
     def _update_trim_summary(self):
         actions = [
@@ -823,10 +1095,7 @@ class CheckpointEditorWindow(tk.Toplevel):
         if not actions:
             self.trim_summary_var.set("没有键鼠操作，无法按首尾裁剪")
             return
-        meta = read_meta(self.folder)
-        total = float(meta.get("duration", 0.0) or 0.0)
-        if total <= 0:
-            total = max((float(event.get("t", 0.0) or 0.0) for event in self.events), default=0.0)
+        total = self._timeline_duration()
         self.trim_summary_var.set(
             f"首操作 {min(actions):.2f}s · 末操作 {max(actions):.2f}s · "
             f"事件 {len(self.events)} · 时长 {total:.2f}s"
@@ -909,7 +1178,21 @@ class CheckpointEditorWindow(tk.Toplevel):
             save_events(self.folder, self.events)
             meta = read_meta(self.folder)
             max_time = max((float(event.get("t", 0.0)) for event in self.events), default=0.0)
-            duration = max(float(meta.get("duration", 0.0) or 0.0), max_time)
+            if self._frames_need_trim:
+                duration = max(self._frame_end - self._frame_start, max_time)
+                frame_count = trim_frames(
+                    self.folder,
+                    self._frame_start,
+                    self._frame_start + duration,
+                )
+                meta["frame_count"] = frame_count
+                self._frame_start = 0.0
+                self._frame_end = duration
+                self._frames_need_trim = False
+            else:
+                duration = max(float(meta.get("duration", 0.0) or 0.0), max_time)
+                self._frame_start = 0.0
+                self._frame_end = duration
             if not self.events:
                 duration = 0.0
             meta["event_count"] = len(self.events)
@@ -919,8 +1202,10 @@ class CheckpointEditorWindow(tk.Toplevel):
             messagebox.showerror("写入失败", str(exc), parent=self)
             return False
         self.dirty = False
+        self._saved_state = self._dirty_signature()
+        self._update_trim_summary()
         if not quiet:
-            self.status_var.set("已写入会话，原文件备份为 events.jsonl.bak")
+            self.status_var.set("已保存到会话文件，原文件备份为 events.jsonl.bak")
         if self.on_saved is not None:
             self.on_saved()
         return True
@@ -929,7 +1214,7 @@ class CheckpointEditorWindow(tk.Toplevel):
         if self.dirty:
             answer = messagebox.askyesnocancel(
                 "未写入",
-                "修改尚未写入会话。\n\n是 = 写入并关闭\n否 = 直接关闭\n取消 = 留下",
+                "修改尚未保存到会话文件。\n\n是 = 保存并关闭\n否 = 直接关闭\n取消 = 留下",
                 parent=self,
             )
             if answer is None:
@@ -1019,7 +1304,7 @@ class BranchEditorWindow(tk.Toplevel):
             bg=FIELD,
             fg=FG,
             selectbackground=ACCENT,
-            selectforeground="#08110d",
+            selectforeground=SELECT_FG,
             relief="flat",
             highlightthickness=0,
             activestyle="none",

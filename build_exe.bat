@@ -10,7 +10,7 @@ echo Installing build dependencies...
 python -m pip install --upgrade pyinstaller pillow --disable-pip-version-check
 if errorlevel 1 goto error
 echo Building %APP_NAME%.exe ...
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name "%APP_NAME%" --icon "%cd%\assets\app.ico" --add-data "%cd%\VERSION;." --distpath "." --workpath "build" --specpath "build" gui.py
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name "%APP_NAME%" --icon "%cd%\assets\app.ico" --add-data "%cd%\VERSION;." --add-data "%cd%\assets\app.ico;assets" --distpath "." --workpath "build" --specpath "build" gui.py
 if errorlevel 1 goto error
 echo %APP_NAME%.exe>last_build.txt
 echo.

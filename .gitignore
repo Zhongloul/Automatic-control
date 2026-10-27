@@ -10,5 +10,6 @@ dist/
 *.spec
 旧版本/
 *.exe
+!/自动化控制台_v*.exe
 last_build.txt
 .pytest_cache/

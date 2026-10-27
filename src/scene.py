@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 from .imageio import imread, imwrite
+from .session_store import load_events, save_events
 
 
 @dataclass
@@ -366,3 +367,54 @@ def delete_scene(root, scene_id):
     folder = scenes_dir(root) / str(scene_id)
     if folder.is_dir():
         shutil.rmtree(folder)
+
+
+def _rename_session_scene_refs(root, old_id, new_id):
+    base = Path(root) / "sessions"
+    if not base.is_dir():
+        return 0
+    changed_refs = 0
+    for folder in base.iterdir():
+        if not folder.is_dir() or not (folder / "events.jsonl").is_file():
+            continue
+        try:
+            events = load_events(folder)
+        except OSError:
+            continue
+        changed = 0
+        for event in events:
+            if str(event.get("type") or "").lower() != "checkpoint":
+                continue
+            if str(event.get("scene") or "") == old_id:
+                event["scene"] = new_id
+                changed += 1
+            cases = event.get("cases")
+            if isinstance(cases, list):
+                for case in cases:
+                    if isinstance(case, dict) and str(case.get("scene") or "") == old_id:
+                        case["scene"] = new_id
+                        changed += 1
+        if changed:
+            try:
+                save_events(folder, events)
+            except OSError:
+                continue
+            changed_refs += changed
+    return changed_refs
+
+
+def rename_scene(root, old_id, new_id):
+    old_id = str(old_id or "").strip()
+    new_id = str(new_id or "").strip()
+    if not validate_scene_id(new_id):
+        raise ValueError("场景名不能为空，也不能包含 \\ / : * ? \" < > |")
+    if old_id == new_id:
+        return 0
+    folder = scenes_dir(root) / old_id
+    target = scenes_dir(root) / new_id
+    if target.exists():
+        raise FileExistsError(f"场景已存在: {new_id}")
+    if folder.is_dir():
+        folder.rename(target)
+    changed = _rename_session_scene_refs(root, old_id, new_id)
+    return changed

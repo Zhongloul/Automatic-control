@@ -16,20 +16,14 @@ from .scene import (
     delete_scene,
     list_markers,
     list_scene_ids,
+    rename_scene,
     save_marker,
     scenes_dir,
     validate_scene_id,
 )
+from .theme import ACCENT, BG, CANVAS_BG, DANGER, FG, FIELD, MUTED, PANEL, SELECT_FG, WARN
 from .ui_common import hide_window_if_testing
 
-BG = "#14161b"
-PANEL = "#1d2027"
-FIELD = "#11141a"
-FG = "#e8e8e8"
-MUTED = "#93a0b4"
-ACCENT = "#0fb98a"
-WARN = "#ffcc66"
-DANGER = "#ff6b6b"
 FONT = "Microsoft YaHei UI"
 
 ACTION_TYPES = ("key_tap", "key", "key_hold", "wait", "click", "move")
@@ -126,11 +120,11 @@ class MarkerCaptureWindow(tk.Toplevel):
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
-        canvas_frame = tk.Frame(self, bg="#0a0b0e")
+        canvas_frame = tk.Frame(self, bg=CANVAS_BG)
         canvas_frame.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
         self.canvas = tk.Canvas(
             canvas_frame,
-            bg="#0a0b0e",
+            bg=CANVAS_BG,
             highlightthickness=0,
         )
         self.canvas.pack(fill="both", expand=True)
@@ -644,7 +638,7 @@ class SceneManagerWindow(tk.Toplevel):
             exportselection=False,
             fg=FG,
             selectbackground=ACCENT,
-            selectforeground="#08110d",
+            selectforeground=SELECT_FG,
             relief="flat",
             highlightthickness=0,
             activestyle="none",
@@ -652,6 +646,15 @@ class SceneManagerWindow(tk.Toplevel):
         )
         self.scene_list.pack(fill="y", expand=True, pady=(6, 6))
         self.scene_list.bind("<<ListboxSelect>>", self._on_scene_select)
+        self.scene_list.bind("<Double-Button-1>", self._rename_selected_scene)
+        tk.Label(
+            left,
+            text="双击场景可重命名",
+            bg=PANEL,
+            fg=MUTED,
+            font=(FONT, 8),
+            anchor="w",
+        ).pack(fill="x", pady=(0, 4))
         buttons = ttk.Frame(left, style="Panel.TFrame")
         buttons.pack(fill="x")
         ttk.Button(buttons, text="新增场景", command=self._add_scene).grid(row=0, column=0, sticky="ew", padx=(0, 3))
@@ -673,7 +676,7 @@ class SceneManagerWindow(tk.Toplevel):
             exportselection=False,
             fg=FG,
             selectbackground=ACCENT,
-            selectforeground="#08110d",
+            selectforeground=SELECT_FG,
             relief="flat",
             highlightthickness=0,
             activestyle="none",
@@ -688,7 +691,7 @@ class SceneManagerWindow(tk.Toplevel):
         ttk.Button(marker_buttons, text="导入图片", command=self._import_marker).pack(side="left", padx=6)
         ttk.Button(marker_buttons, text="删除标记", command=self._delete_marker).pack(side="left")
 
-        self.preview_canvas = tk.Canvas(right, bg="#0a0b0e", height=320, highlightthickness=0)
+        self.preview_canvas = tk.Canvas(right, bg=CANVAS_BG, height=320, highlightthickness=0)
         self.preview_canvas.grid(row=3, column=0, sticky="nsew", pady=(0, 8))
 
         actions = ttk.Frame(right, style="Panel.TFrame")
@@ -828,7 +831,7 @@ class SceneManagerWindow(tk.Toplevel):
                 canvas_w // 2,
                 canvas_h // 2,
                 text="暂无标记图片\n可“从目标画面抓取”或“导入图片”",
-                fill="#77808f",
+                fill=MUTED,
                 font=(FONT, 10),
                 justify="center",
             )
@@ -862,6 +865,55 @@ class SceneManagerWindow(tk.Toplevel):
         self.log(f"新增场景: {scene_id}")
         self.status_var.set(f"已创建场景 {scene_id}，请添加至少一张标记图片")
         self._refresh_scenes(select=scene_id)
+
+    def _rename_selected_scene(self, _event=None):
+        old_id = self._selected_scene()
+        if not old_id:
+            messagebox.showinfo("提示", "请先选择一个场景", parent=self)
+            return
+        new_id = simpledialog.askstring(
+            "重命名场景",
+            "输入新的场景 ID（会同步更新流程和回放断点）：",
+            initialvalue=old_id,
+            parent=self,
+        )
+        if new_id is None:
+            return
+        new_id = new_id.strip()
+        if not new_id or new_id == old_id:
+            return
+        if not validate_scene_id(new_id):
+            messagebox.showerror("无效名称", "场景名不能为空，也不能包含 \\ / : * ? \" < > |", parent=self)
+            return
+        if (scenes_dir(self.root_dir) / new_id).exists():
+            messagebox.showerror("重命名失败", f"场景已存在: {new_id}", parent=self)
+            return
+        try:
+            updated = rename_scene(self.root_dir, old_id, new_id)
+        except Exception as exc:
+            messagebox.showerror("重命名失败", str(exc), parent=self)
+            return
+        profiles = self.config.setdefault("scenes", {}).setdefault("profiles", {})
+        if old_id in profiles:
+            profiles[new_id] = profiles.pop(old_id)
+        map_cfg = self.config.setdefault("map_graph", {})
+        if str(map_cfg.get("start_scene") or "") == old_id:
+            map_cfg["start_scene"] = new_id
+        flow_refs = 0
+        for transition in map_cfg.setdefault("transitions", []):
+            if not isinstance(transition, dict):
+                continue
+            for key in ("from", "to"):
+                if str(transition.get(key) or "") == old_id:
+                    transition[key] = new_id
+                    flow_refs += 1
+        self.dirty = True
+        self.log(f"重命名场景: {old_id} -> {new_id}，回放引用 {updated} 处，流程引用 {flow_refs} 处")
+        self.status_var.set(
+            f"已重命名 {old_id} → {new_id}；更新回放引用 {updated} 处、流程引用 {flow_refs} 处，点击“保存并应用”写入配置"
+        )
+        self._refresh_scenes(select=new_id)
+        self._refresh_flow()
 
     def _delete_scene(self):
         scene_id = self._selected_scene()

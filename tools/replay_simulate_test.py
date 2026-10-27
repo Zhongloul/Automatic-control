@@ -26,6 +26,7 @@ from src.session_store import (
     save_events,
     write_meta,
 )
+from src.scene import delete_scene, rename_scene, scenes_dir
 from src.session_trim import trim_session
 
 PASSED = 0
@@ -279,6 +280,44 @@ def test_session_trim(root):
         f"stats={no_action}",
     )
     delete_session(empty)
+
+
+def test_scene_rename(root):
+    old_id = "old_scene"
+    new_id = "new_scene"
+    old_dir = scenes_dir(root) / old_id
+    old_dir.mkdir(parents=True)
+    imwrite(old_dir / "marker_1.png", np.zeros((40, 60, 3), dtype=np.uint8))
+    session = create_session(root, {"window_title": "Fake Game", "client_size": [1280, 720], "keys": []})
+    save_events(
+        session,
+        [
+            {"t": 0.0, "type": "checkpoint", "name": "wait_visual", "source": "scene", "scene": old_id},
+            {
+                "t": 1.0,
+                "type": "checkpoint",
+                "name": "branch",
+                "cases": [{"source": "scene", "scene": old_id, "goto": {"session": "target"}}],
+            },
+        ],
+    )
+    updated = rename_scene(root, old_id, new_id)
+    check("scene rename refs", updated == 2, f"updated={updated}")
+    check(
+        "scene rename folder",
+        (scenes_dir(root) / new_id / "marker_1.png").is_file() and not old_dir.exists(),
+        f"dirs={[path.name for path in scenes_dir(root).iterdir()]}",
+    )
+    events = load_events(session)
+    scenes = [str(event.get("scene") or "") for event in events]
+    scenes.extend(
+        str(case.get("scene") or "")
+        for event in events
+        for case in (event.get("cases") or [])
+    )
+    check("scene rename events", all(value == new_id for value in scenes if value), f"scenes={scenes}")
+    delete_session(session)
+    delete_scene(root, new_id)
 
 
 def test_replay(root):
@@ -685,6 +724,7 @@ def test_branch_checkpoint(root):
         return "ok" if time.perf_counter() - state["start"] >= 0.2 else None
 
     fake_input = FakeInput(True)
+    session_changes = []
     player = ReplayPlayer(
         config,
         FakeWindow(True),
@@ -694,10 +734,16 @@ def test_branch_checkpoint(root):
         loops=1,
         loop_gap_s=0,
         scene_checker=scene_checker,
+        session_callback=lambda folder, label: session_changes.append((Path(folder).name, label)),
     )
     result = player.run()
     keys = [call for call in fake_input.calls if call[0] in ("key_down", "key_up")]
     check("branch scene success", result.success, f"message={result.message}")
+    check(
+        "branch session callback",
+        any(name == ok_folder.name and "scene=ok" in label for name, label in session_changes),
+        f"changes={session_changes}",
+    )
     check(
         "branch scene target executed only",
         [call[1] for call in keys] == ["a", "a"],
@@ -819,6 +865,12 @@ def test_recorder_lifecycle(root):
     if folder is not None:
         events = load_events(folder)
         check("recorder checkpoint saved", any(event.get("type") == "checkpoint" for event in events), f"events={events[:3]}")
+        recent = recorder.status().get("recent_events") or []
+        check(
+            "recorder recent events",
+            any(event.get("type") == "checkpoint" for event in recent),
+            f"recent={recent}",
+        )
         meta = __import__("json").loads((folder / "meta.json").read_text(encoding="utf-8"))
         check("recorder duration", float(meta.get("duration", 0)) > 0.1, f"duration={meta.get('duration')}")
         delete_session(folder)
@@ -832,6 +884,7 @@ def main():
     try:
         test_session_store(root)
         test_session_rename(root)
+        test_scene_rename(root)
         test_session_trim(root)
         test_replay(root)
         test_checkpoint_wait_scene(root)

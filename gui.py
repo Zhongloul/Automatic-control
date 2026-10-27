@@ -25,19 +25,25 @@ from src.replay_ui import CheckpointEditorWindow
 from src.scene import SceneRecognizer, list_markers, list_scene_ids
 from src.scene_ui import SceneManagerWindow
 from src.session_store import delete_session, list_sessions, load_events, rename_session, sessions_dir
+from src.theme import (
+    ACCENT,
+    ACCENT_ACTIVE,
+    BG,
+    CANVAS_BG,
+    DANGER,
+    FG,
+    FIELD,
+    LIST_BG,
+    LIST_FG,
+    MUTED,
+    PANEL,
+    SELECT_FG,
+    WARN,
+)
 from src.ui_common import hide_window_if_testing
 from src.version import get_version
 from src.window import list_windows, set_dpi_awareness
 
-BG = "#14161b"
-PANEL = "#1d2027"
-FIELD = "#11141a"
-FG = "#e8e8e8"
-MUTED = "#93a0b4"
-ACCENT = "#0fb98a"
-ACCENT_ACTIVE = "#17d6a2"
-WARN = "#ffcc66"
-DANGER = "#ff6b6b"
 FONT = "Microsoft YaHei UI"
 
 STEP_INFO = [
@@ -198,13 +204,13 @@ class CalibrationWindow(tk.Toplevel):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
-        canvas_frame = tk.Frame(self, bg="#0a0b0e")
+        canvas_frame = tk.Frame(self, bg=CANVAS_BG)
         canvas_frame.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
         self.canvas = tk.Canvas(
             canvas_frame,
             width=self.canvas_width,
             height=self.canvas_height,
-            bg="#0a0b0e",
+            bg=CANVAS_BG,
             highlightthickness=0,
         )
         self.canvas.pack(fill="both", expand=True)
@@ -227,7 +233,7 @@ class CalibrationWindow(tk.Toplevel):
             exportselection=False,
             fg=FG,
             selectbackground=ACCENT,
-            selectforeground="#08110d",
+            selectforeground=SELECT_FG,
             relief="flat",
             highlightthickness=0,
             activestyle="none",
@@ -548,6 +554,11 @@ class AutomationApp(tk.Tk):
         self._replay_current = None
         self._replay_highlight_index = None
         self._replay_session_path = None
+        self._replay_display_events = []
+        self._replay_display_name = ""
+        self._replay_branch_note = ""
+        self._pending_replay_session = None
+        self._replay_restore_pending = False
         self._last_replay_ui = 0.0
 
         self.app_version = get_version()
@@ -592,7 +603,7 @@ class AutomationApp(tk.Tk):
         style.configure("TaskTitle.TLabel", background=PANEL, foreground=FG, font=(FONT, 13, "bold"))
         style.configure("Title.TLabel", background=BG, foreground=FG, font=(FONT, 14, "bold"))
         style.configure("TButton", font=(FONT, 9), padding=(10, 5))
-        style.configure("Accent.TButton", font=(FONT, 9, "bold"), padding=(10, 7), background=ACCENT, foreground="#08110d")
+        style.configure("Accent.TButton", font=(FONT, 9, "bold"), padding=(10, 7), background=ACCENT, foreground=SELECT_FG)
         style.map("Accent.TButton", background=[("active", ACCENT_ACTIVE), ("disabled", "#3a4c46")])
         style.configure("TCheckbutton", background=PANEL, foreground=FG, font=(FONT, 9))
         style.map("TCheckbutton", background=[("active", PANEL)])
@@ -606,7 +617,7 @@ class AutomationApp(tk.Tk):
             bordercolor="#2a2f3a",
         )
         style.configure("Treeview.Heading", background=PANEL, foreground=MUTED, font=(FONT, 9, "bold"))
-        style.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", "#08110d")])
+        style.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", SELECT_FG)])
         style.configure("TNotebook", background=BG, borderwidth=0)
         style.configure("TNotebook.Tab", background=PANEL, foreground=MUTED, padding=(16, 7))
         style.map("TNotebook.Tab", background=[("selected", FIELD)], foreground=[("selected", FG)])
@@ -630,6 +641,7 @@ class AutomationApp(tk.Tk):
         self.task_hint_var = tk.StringVar(value="")
         self.task_goal_var = tk.StringVar(value="")
         self.record_status_var = tk.StringVar(value="未录制")
+        self._record_event_signature = ()
         self.replay_status_var = tk.StringVar(value="未回放")
         self.replay_current_var = tk.StringVar(value="当前事件: -")
         self.session_info_var = tk.StringVar(value="未选择会话")
@@ -681,7 +693,7 @@ class AutomationApp(tk.Tk):
         left.grid(row=0, column=0, sticky="nsew", padx=(4, 8), pady=4)
         left.columnconfigure(0, weight=1)
         left.rowconfigure(0, weight=1)
-        self.preview_canvas = tk.Canvas(left, bg="#0a0b0e", highlightthickness=0)
+        self.preview_canvas = tk.Canvas(left, bg=CANVAS_BG, highlightthickness=0)
         self.preview_canvas.grid(row=0, column=0, sticky="nsew")
         ttk.Label(
             left,
@@ -747,8 +759,8 @@ class AutomationApp(tk.Tk):
         self.log_text = tk.Text(
             log_frame,
             height=14,
-            bg="#0f1115",
-            fg="#cfd8e3",
+            bg=LIST_BG,
+            fg=LIST_FG,
             insertbackground=FG,
             relief="flat",
             wrap="word",
@@ -789,7 +801,7 @@ class AutomationApp(tk.Tk):
             exportselection=False,
             fg=FG,
             selectbackground=ACCENT,
-            selectforeground="#08110d",
+            selectforeground=SELECT_FG,
             relief="flat",
             highlightthickness=0,
             activestyle="none",
@@ -937,7 +949,7 @@ class AutomationApp(tk.Tk):
             exportselection=False,
             fg=FG,
             selectbackground=ACCENT,
-            selectforeground="#08110d",
+            selectforeground=SELECT_FG,
             relief="flat",
             highlightthickness=0,
             activestyle="none",
@@ -996,11 +1008,36 @@ class AutomationApp(tk.Tk):
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
         ttk.Label(
             record,
-            text="录制只采集目标窗口前台时的键鼠；离开目标窗口会自动暂停。录制时自动保存画面（4 fps），停止后可在“编辑”里手动去头/去尾，或用“自动加断点”生成画面状态同步。F6/F7 开始/停止，切换或触发操作后按 F5 插入同步断点。",
+            text="录制只采集目标窗口前台键鼠；停止后可在“编辑”里裁剪/加断点。F6/F7 开始/停止，触发切换后按 F5 插入同步断点。",
             style="Panel.TLabel",
             wraplength=760,
             justify="left",
         ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.record_events_label = ttk.Label(record, text="录制事件（最近 4 条）", style="Panel.TLabel")
+        self.record_events_label.grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.record_events_frame = ttk.Frame(record, style="Panel.TFrame")
+        self.record_events_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        self.record_events_frame.columnconfigure(0, weight=1)
+        self.record_event_list = tk.Listbox(
+            self.record_events_frame,
+            height=4,
+            bg=FIELD,
+            fg=FG,
+            selectbackground=ACCENT,
+            selectforeground=SELECT_FG,
+            relief="flat",
+            highlightthickness=0,
+            activestyle="none",
+            font=("Consolas", 9),
+        )
+        self.record_event_list.grid(row=0, column=0, sticky="ew")
+        record_event_scroll = ttk.Scrollbar(
+            self.record_events_frame, orient="vertical", command=self.record_event_list.yview
+        )
+        record_event_scroll.grid(row=0, column=1, sticky="ns")
+        self.record_event_list.configure(yscrollcommand=record_event_scroll.set)
+        self.record_events_label.grid_remove()
+        self.record_events_frame.grid_remove()
 
         replay = ttk.Frame(right, style="Panel.TFrame")
         replay.grid(row=1, column=0, sticky="ew", pady=(12, 0))
@@ -1091,11 +1128,11 @@ class AutomationApp(tk.Tk):
         self.event_list = tk.Listbox(
             preview_frame,
             height=10,
-            bg="#0f1115",
+            bg=LIST_BG,
             exportselection=False,
-            fg="#cfd8e3",
+            fg=LIST_FG,
             selectbackground=ACCENT,
-            selectforeground="#08110d",
+            selectforeground=SELECT_FG,
             relief="flat",
             highlightthickness=0,
             activestyle="none",
@@ -1200,22 +1237,25 @@ class AutomationApp(tk.Tk):
         self._refresh_task_status(force=True)
         self._update_replay_ui()
 
-    def _set_event_preview(self, events):
-        self._session_events = list(events)
+    def _render_event_list(self, events):
         self.event_list.delete(0, "end")
         lines = [
             f"{float(event.get('t', 0.0)):7.3f}  {format_replay_event(event)}"
-            for event in self._session_events
+            for event in events
         ]
         for start in range(0, len(lines), 500):
             self.event_list.insert("end", *lines[start : start + 500])
         self._replay_highlight_index = None
+
+    def _set_event_preview(self, events):
+        self._session_events = list(events)
+        self._render_event_list(self._session_events)
         self.replay_current_var.set("当前事件: -")
 
     def _clear_replay_highlight(self):
         if self._replay_highlight_index is not None and self._replay_highlight_index < self.event_list.size():
             try:
-                self.event_list.itemconfig(self._replay_highlight_index, background="#0f1115", foreground="#cfd8e3")
+                self.event_list.itemconfig(self._replay_highlight_index, background=LIST_BG, foreground=LIST_FG)
             except tk.TclError:
                 pass
         self._replay_highlight_index = None
@@ -1238,9 +1278,14 @@ class AutomationApp(tk.Tk):
         if str(self.selected_session) != str(self._replay_session_path):
             return
         index = int(current.get("index", -1))
+        display_events = (
+            self._replay_display_events
+            if self._replay_running
+            else self._session_events
+        )
         expected = (
-            self._session_events[index]
-            if 0 <= index < len(self._session_events)
+            display_events[index]
+            if 0 <= index < len(display_events)
             else None
         )
         highlight = (
@@ -1253,13 +1298,13 @@ class AutomationApp(tk.Tk):
                     try:
                         self.event_list.itemconfig(
                             self._replay_highlight_index,
-                            background="#0f1115",
-                            foreground="#cfd8e3",
+                            background=LIST_BG,
+                            foreground=LIST_FG,
                         )
                     except tk.TclError:
                         pass
                 try:
-                    self.event_list.itemconfig(index, background=ACCENT, foreground="#08110d")
+                    self.event_list.itemconfig(index, background=ACCENT, foreground=SELECT_FG)
                     self.event_list.see(max(0, index - 2))
                 except tk.TclError:
                     pass
@@ -1269,8 +1314,8 @@ class AutomationApp(tk.Tk):
                 try:
                     self.event_list.itemconfig(
                         self._replay_highlight_index,
-                        background="#0f1115",
-                        foreground="#cfd8e3",
+                        background=LIST_BG,
+                        foreground=LIST_FG,
                     )
                 except tk.TclError:
                     pass
@@ -1278,8 +1323,11 @@ class AutomationApp(tk.Tk):
         event = current.get("event") or {}
         total_loops = current.get("loops", 1)
         loops_text = "∞" if total_loops == 0 else str(total_loops)
+        prefix = ""
+        if self._replay_running and self._replay_display_name:
+            prefix = f"会话 {self._replay_display_name} · "
         self.replay_current_var.set(
-            f"第 {current.get('loop', 1)}/{loops_text} 轮 · "
+            f"{prefix}第 {current.get('loop', 1)}/{loops_text} 轮 · "
             f"事件 {index + 1}/{current.get('total', self.event_list.size())}: "
             f"{format_replay_event(event)}"
         )
@@ -1493,6 +1541,11 @@ class AutomationApp(tk.Tk):
         self._replay_message = ""
         self._replay_session_path = session_path
         self._replay_current = None
+        self._replay_display_events = list(self._session_events)
+        self._replay_display_name = session_path.name
+        self._replay_branch_note = ""
+        self._pending_replay_session = None
+        self._replay_restore_pending = False
         self._clear_replay_highlight()
         self.replay_current_var.set("等待回放...")
         self._update_replay_ui()
@@ -1523,6 +1576,13 @@ class AutomationApp(tk.Tk):
                         f"回放中 第 {loop_index}/{total} 轮 · 事件 {event_index}/{event_total}"
                     )
 
+                def on_session_change(folder, label):
+                    try:
+                        events = load_events(folder)
+                    except Exception:
+                        events = []
+                    self._pending_replay_session = (str(folder), events, str(label or ""))
+
                 scene_recognizer = SceneRecognizer(config, root)
 
                 def scene_checker():
@@ -1546,6 +1606,7 @@ class AutomationApp(tk.Tk):
                     scene_checker=scene_checker,
                     checkpoint_immediate=checkpoint_immediate,
                     frame_getter=engine.current_frame,
+                    session_callback=on_session_change,
                 )
                 result = player.run()
                 prefix = "回放完成: " if result.success else "回放结束: "
@@ -1563,6 +1624,7 @@ class AutomationApp(tk.Tk):
                 engine.set_external_lock(False)
                 self._replay_running = False
                 self._replay_progress = ""
+                self._replay_restore_pending = True
 
         self._replay_thread = threading.Thread(target=worker, daemon=True, name="replay-task")
         self._replay_thread.start()
@@ -1577,15 +1639,30 @@ class AutomationApp(tk.Tk):
             self.engine.inputs.release_all()
         self._log("任务中心: 停止回放")
 
+    def _refresh_record_events(self, events):
+        recent = list(events or [])[-4:]
+        signature = tuple(repr(event) for event in recent)
+        if signature == self._record_event_signature:
+            return
+        self._record_event_signature = signature
+        self.record_event_list.delete(0, "end")
+        for event in recent:
+            t = float(event.get("t", 0.0) or 0.0)
+            self.record_event_list.insert("end", f"{t:8.3f}  {format_replay_event(event)}")
+        if recent:
+            self.record_event_list.see("end")
+
     def _update_replay_ui(self):
         if self.recorder is not None and not self.recorder.recording:
             self._stop_recording()
             return
+        recent_events = []
         if self._record_pending:
             remaining = max(0, int(math.ceil(self._record_countdown_end - time.perf_counter())))
             self.record_status_var.set(f"{remaining} 秒后开始录制，请切到目标窗口")
         elif self.recorder is not None:
             status = self.recorder.status()
+            recent_events = status.get("recent_events") or []
             focus = "目标窗口前台" if status["focused"] else "目标窗口不在前台，录制暂停"
             self.record_status_var.set(
                 f"录制中 · {status['elapsed']:.1f}s · {status['event_count']} 事件 · "
@@ -1593,9 +1670,43 @@ class AutomationApp(tk.Tk):
             )
         else:
             self.record_status_var.set(self._record_message or "未录制")
+        show_record_events = self.recorder is not None and self.recorder.recording
+        for widget in (self.record_events_label, self.record_events_frame):
+            if show_record_events:
+                widget.grid()
+            else:
+                widget.grid_remove()
+        if self.recorder is not None and show_record_events:
+            self._refresh_record_events(recent_events)
+
+        pending = self._pending_replay_session
+        if pending is not None:
+            self._pending_replay_session = None
+            folder, events, label = pending
+            self._replay_display_events = list(events)
+            self._replay_display_name = Path(folder).name
+            self._render_event_list(self._replay_display_events)
+            if label:
+                self._replay_branch_note = f"分支 → {Path(folder).name}（{label}）"
+                self._log(f"回放分支跳转: {label} → {Path(folder).name}")
+            else:
+                self._replay_branch_note = ""
+        if not self._replay_running and self._replay_restore_pending:
+            self._replay_restore_pending = False
+            if self._replay_branch_note:
+                self._replay_message = f"{self._replay_message}；{self._replay_branch_note}"
+            self._replay_branch_note = ""
+            self._replay_display_events = list(self._session_events)
+            self._replay_display_name = ""
+            self._render_event_list(self._session_events)
+            self._replay_current = None
+            self.replay_current_var.set("当前事件: -")
 
         if self._replay_running:
-            self.replay_status_var.set(self._replay_progress or "回放中...")
+            status_text = self._replay_progress or "回放中..."
+            if self._replay_branch_note:
+                status_text = f"{status_text} · {self._replay_branch_note}"
+            self.replay_status_var.set(status_text)
         else:
             self.replay_status_var.set(self._replay_message or "未回放")
 
@@ -2159,7 +2270,7 @@ class AutomationApp(tk.Tk):
                     canvas_w // 2,
                     canvas_h // 2,
                     text="未获取到目标画面\n请锁定窗口，并确认目标窗口使用无边框窗口模式",
-                    fill="#77808f",
+                    fill=MUTED,
                     font=(FONT, 11),
                     justify="center",
                 )
@@ -2247,7 +2358,7 @@ class AutomationApp(tk.Tk):
             exportselection=False,
             fg=FG,
             selectbackground=ACCENT,
-            selectforeground="#08110d",
+            selectforeground=SELECT_FG,
             relief="flat",
             highlightthickness=0,
             font=(FONT, 9),
