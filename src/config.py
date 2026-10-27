@@ -124,7 +124,6 @@ DEFAULT_CONFIG = {
         "record_mouse_move": False,
         "frame_sample_hz": 4.0,
         "frame_max_width": 480,
-        "trim_idle": True,
         "keys": DEFAULT_RECORD_KEYS,
     },
     "replay": {

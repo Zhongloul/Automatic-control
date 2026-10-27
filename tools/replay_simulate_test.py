@@ -233,6 +233,43 @@ def test_session_trim(root):
     check("trim session frames", remaining == ["2.jpg", "3.jpg", "4.jpg", "5.jpg"], f"frames={remaining}")
     delete_session(folder)
 
+    base_events = [
+        {"t": 0.5, "type": "checkpoint", "name": "sync"},
+        {"t": 2.0, "type": "key_down", "key": "d"},
+        {"t": 2.2, "type": "key_up", "key": "d"},
+        {"t": 2.5, "type": "checkpoint", "name": "wait_seconds", "seconds": 0.1},
+        {"t": 3.0, "type": "mouse_down", "button": "left", "pos": [0.5, 0.5]},
+        {"t": 5.0, "type": "mouse_up", "button": "left", "pos": [0.5, 0.5]},
+        {"t": 6.0, "type": "checkpoint", "name": "sync"},
+    ]
+    head_only = create_session(root, {"window_title": "Fake Game", "client_size": [1280, 720], "keys": []})
+    save_events(head_only, base_events)
+    head_stats = trim_session(head_only, trim_head=True, trim_tail=False, total_elapsed=7.0)
+    head_times = [round(float(event.get("t", 0)), 3) for event in load_events(head_only)]
+    check(
+        "trim head only",
+        head_stats["offset"] == 2.0
+        and head_stats["tail"] == 0.0
+        and head_stats["duration"] == 5.0
+        and head_times == [0.0, 0.2, 0.5, 1.0, 3.0, 4.0],
+        f"stats={head_stats} times={head_times}",
+    )
+    delete_session(head_only)
+
+    tail_only = create_session(root, {"window_title": "Fake Game", "client_size": [1280, 720], "keys": []})
+    save_events(tail_only, base_events)
+    tail_stats = trim_session(tail_only, trim_head=False, trim_tail=True, total_elapsed=7.0)
+    tail_times = [round(float(event.get("t", 0)), 3) for event in load_events(tail_only)]
+    check(
+        "trim tail only",
+        tail_stats["offset"] == 0.0
+        and tail_stats["tail"] == 2.0
+        and tail_stats["duration"] == 5.0
+        and tail_times == [0.5, 2.0, 2.2, 2.5, 3.0, 5.0],
+        f"stats={tail_stats} times={tail_times}",
+    )
+    delete_session(tail_only)
+
     empty = create_session(root, {"window_title": "Fake Game", "client_size": [1280, 720], "keys": []})
     save_events(empty, [{"t": 1.0, "type": "checkpoint", "name": "sync"}])
     no_action = trim_session(empty, total_elapsed=2.0)
@@ -768,7 +805,6 @@ def test_recorder_lifecycle(root):
     fake_window = FakeWindow(True)
     config = create_default_config()
     config["recorder"]["poll_hz"] = 100
-    config["recorder"]["trim_idle"] = False
     recorder = InputRecorder(config, fake_window, root, log=lambda message: None)
     folder = recorder.start()
     time.sleep(0.1)

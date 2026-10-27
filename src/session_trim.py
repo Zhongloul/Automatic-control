@@ -38,7 +38,7 @@ def _current_frame_count(folder):
         return 0
 
 
-def trim_session(folder, enabled=True, total_elapsed=None):
+def trim_session(folder, enabled=True, trim_head=True, trim_tail=True, total_elapsed=None):
     folder = Path(folder)
     events = load_events(folder)
     events.sort(key=lambda event: float(event.get("t", 0.0) or 0.0))
@@ -51,7 +51,7 @@ def trim_session(folder, enabled=True, total_elapsed=None):
             "events": 0,
             "frames": _current_frame_count(folder),
         }
-    if not enabled:
+    if not enabled or (not trim_head and not trim_tail):
         return {
             "trimmed": False,
             "offset": 0.0,
@@ -80,32 +80,38 @@ def trim_session(folder, enabled=True, total_elapsed=None):
     last_t = float(events[last_index].get("t", 0.0) or 0.0)
     if last_t < first_t:
         first_t, last_t = last_t, first_t
-    duration = max(0.0, last_t - first_t)
-    kept_events = []
-    for event in events[first_index : last_index + 1]:
-        item = dict(event)
-        item["t"] = round(float(item.get("t", 0.0) or 0.0) - first_t, 4)
-        kept_events.append(item)
-    dropped = len(events) - len(kept_events)
-    if dropped or first_t > 0:
-        save_events(folder, kept_events)
-    frame_count = _trim_frames(folder, first_t, last_t)
     original_end = float(total_elapsed or 0.0)
     if original_end < last_t:
         original_end = last_t
-    tail = max(0.0, original_end - last_t)
+    start = first_t if trim_head else 0.0
+    end = last_t if trim_tail else original_end
+    if end < start:
+        end = start
+    duration = max(0.0, end - start)
+    kept_events = []
+    for event in events:
+        event_t = float(event.get("t", 0.0) or 0.0)
+        if start <= event_t <= end:
+            item = dict(event)
+            item["t"] = round(event_t - start, 4)
+            kept_events.append(item)
+    dropped = len(events) - len(kept_events)
+    if dropped or start > 0:
+        save_events(folder, kept_events)
+    frame_count = _trim_frames(folder, start, end)
+    tail = max(0.0, original_end - end)
     meta = read_meta(folder)
     meta["duration"] = round(duration, 3)
     meta["event_count"] = len(kept_events)
     meta["frame_count"] = frame_count
-    if first_t > 0:
-        meta["trimmed_lead_s"] = round(first_t, 3)
+    if start > 0:
+        meta["trimmed_lead_s"] = round(start, 3)
     if tail > 0:
         meta["trimmed_tail_s"] = round(tail, 3)
     write_meta(folder, meta)
     return {
-        "trimmed": first_t > 0 or tail > 0 or dropped > 0,
-        "offset": first_t,
+        "trimmed": start > 0 or tail > 0 or dropped > 0,
+        "offset": start,
         "tail": tail,
         "duration": duration,
         "events": len(kept_events),

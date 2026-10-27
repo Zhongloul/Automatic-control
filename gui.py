@@ -962,7 +962,7 @@ class AutomationApp(tk.Tk):
         ttk.Button(session_buttons, text="删除", command=self._delete_selected_session).grid(
             row=0, column=1, sticky="ew", padx=(3, 0)
         )
-        ttk.Button(session_buttons, text="编辑断点", command=self._open_checkpoint_editor).grid(
+        ttk.Button(session_buttons, text="编辑", command=self._open_checkpoint_editor).grid(
             row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0)
         )
         ttk.Button(session_buttons, text="自动加断点", command=self._open_auto_analyzer).grid(
@@ -996,7 +996,7 @@ class AutomationApp(tk.Tk):
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
         ttk.Label(
             record,
-            text="录制只采集目标窗口前台时的键鼠；离开目标窗口会自动暂停。停止时会自动去掉首尾空闲（从第一个操作开始、最后一个操作结束）。录制时自动保存画面（4 fps），停止后可用“自动加断点”生成画面状态同步。F6/F7 开始/停止，切换或触发操作后按 F5 插入同步断点。",
+            text="录制只采集目标窗口前台时的键鼠；离开目标窗口会自动暂停。录制时自动保存画面（4 fps），停止后可在“编辑”里手动去头/去尾，或用“自动加断点”生成画面状态同步。F6/F7 开始/停止，切换或触发操作后按 F5 插入同步断点。",
             style="Panel.TLabel",
             wraplength=760,
             justify="left",
@@ -1286,7 +1286,7 @@ class AutomationApp(tk.Tk):
 
     def _open_checkpoint_editor(self):
         if self._task_running or self._replay_running or self.recorder is not None or self._record_pending:
-            messagebox.showwarning("占用中", "请先停止录制、回放或流程任务，再编辑断点。", parent=self)
+            messagebox.showwarning("占用中", "请先停止录制、回放或流程任务，再编辑会话。", parent=self)
             return
         if not self.selected_session:
             messagebox.showinfo("提示", "请先选择一个录制会话", parent=self)
