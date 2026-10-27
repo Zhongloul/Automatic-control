@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+logs/
+captures/
+sessions/
+build/
+dist/
+*.spec
+旧版本/
+*.exe
+last_build.txt
+.pytest_cache/
