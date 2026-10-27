@@ -14,7 +14,8 @@ from .keyframes import (
     make_signature,
     save_reference,
 )
-from .session_store import append_event, create_session, load_events, save_events, write_meta
+from .session_store import append_event, create_session, load_events, read_meta, save_events, write_meta
+from .session_trim import trim_session
 
 MOUSE_VKS = {"left": 0x01, "right": 0x02, "middle": 0x04}
 ACTION_TYPES = {"key_down", "key_up", "mouse_down", "mouse_up"}
@@ -43,6 +44,7 @@ class InputRecorder:
             sample_hz = 0.0
         self.frame_sample_interval = 1.0 / sample_hz if sample_hz > 0 else 0.0
         self.frame_max_width = max(64, int(recorder_cfg.get("frame_max_width", 480) or 480))
+        self.trim_idle = bool(recorder_cfg.get("trim_idle", True))
         self.keys = []
         self.key_vks = {}
         seen = set()
@@ -226,13 +228,26 @@ class InputRecorder:
             self._frame_store = None
         if self.folder is not None:
             self._apply_sync_refs()
-            meta = dict(self._meta)
+            trim = {
+                "trimmed": False,
+                "offset": 0.0,
+                "tail": 0.0,
+                "duration": self.elapsed,
+                "events": self.event_count,
+                "frames": self._frame_count,
+            }
+            if self.trim_idle:
+                try:
+                    trim = trim_session(self.folder, total_elapsed=self.elapsed)
+                except Exception as exc:
+                    self.log(f"去头去尾失败，保留完整录制: {exc}")
+            meta = read_meta(self.folder)
             meta.update(
                 {
                     "name": self.folder.name,
-                    "duration": round(self.elapsed, 3),
-                    "event_count": self.event_count,
-                    "frame_count": self._frame_count,
+                    "duration": round(float(trim.get("duration", self.elapsed)), 3),
+                    "event_count": int(trim.get("events", self.event_count)),
+                    "frame_count": int(trim.get("frames", self._frame_count)),
                     "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }
             )
@@ -240,7 +255,15 @@ class InputRecorder:
                 write_meta(self.folder, meta)
             except Exception as exc:
                 self.log(f"写录制元数据失败: {exc}")
-            self.log(f"录制结束: {self.folder.name} | {self.elapsed:.1f}s | {self.event_count} 个事件")
+            if trim.get("trimmed"):
+                self.log(
+                    f"去头去尾: 去除前 {trim.get('offset', 0.0):.2f}s，"
+                    f"后 {trim.get('tail', 0.0):.2f}s，有效 {trim.get('duration', 0.0):.2f}s"
+                )
+            self.log(
+                f"录制结束: {self.folder.name} | {float(trim.get('duration', self.elapsed)):.1f}s | "
+                f"{int(trim.get('events', self.event_count))} 个事件"
+            )
 
     def _emit(self, kind, **fields):
         if self._handle is None:

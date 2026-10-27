@@ -203,6 +203,7 @@
     "record_mouse_move": false,
     "frame_sample_hz": 4.0,
     "frame_max_width": 480,
+    "trim_idle": true,
     "keys": [
       "a",
       "b",

@@ -21,10 +21,12 @@ from src.session_store import (
     delete_session,
     list_sessions,
     load_events,
+    read_meta,
     rename_session,
     save_events,
     write_meta,
 )
+from src.session_trim import trim_session
 
 PASSED = 0
 FAILED = 0
@@ -189,6 +191,57 @@ def test_session_rename(root):
     check("session rename collision rejected", collision)
     delete_session(new_path)
     delete_session(source)
+
+
+def test_session_trim(root):
+    folder = create_session(root, {"window_title": "Fake Game", "client_size": [1280, 720], "keys": []})
+    events = [
+        {"t": 0.5, "type": "checkpoint", "name": "sync"},
+        {"t": 2.0, "type": "key_down", "key": "d"},
+        {"t": 2.2, "type": "key_up", "key": "d"},
+        {"t": 2.5, "type": "checkpoint", "name": "wait_seconds", "seconds": 0.1},
+        {"t": 3.0, "type": "mouse_down", "button": "left", "pos": [0.5, 0.5]},
+        {"t": 5.0, "type": "mouse_up", "button": "left", "pos": [0.5, 0.5]},
+        {"t": 6.0, "type": "checkpoint", "name": "sync"},
+    ]
+    save_events(folder, events)
+    frames_dir = folder / "frames"
+    frames_dir.mkdir()
+    index_lines = []
+    for second in range(1, 7):
+        name = f"{second}.jpg"
+        imwrite(frames_dir / name, np.zeros((180, 320, 3), dtype=np.uint8))
+        index_lines.append(json.dumps({"t": float(second), "file": name}))
+    (frames_dir / "index.jsonl").write_text("\n".join(index_lines) + "\n", encoding="utf-8")
+
+    stats = trim_session(folder, total_elapsed=7.0)
+    trimmed = load_events(folder)
+    times = [round(float(event.get("t", 0)), 3) for event in trimmed]
+    check("trim session times", times == [0.0, 0.2, 0.5, 1.0, 3.0], f"times={times}")
+    check("trim session stats", stats["duration"] == 3.0 and stats["offset"] == 2.0 and stats["tail"] == 2.0, f"stats={stats}")
+    meta = read_meta(folder)
+    check(
+        "trim session meta",
+        meta.get("duration") == 3.0
+        and meta.get("event_count") == 5
+        and meta.get("frame_count") == 4
+        and meta.get("trimmed_lead_s") == 2.0
+        and meta.get("trimmed_tail_s") == 2.0,
+        f"meta={meta}",
+    )
+    remaining = sorted(path.name for path in frames_dir.glob("*.jpg"))
+    check("trim session frames", remaining == ["2.jpg", "3.jpg", "4.jpg", "5.jpg"], f"frames={remaining}")
+    delete_session(folder)
+
+    empty = create_session(root, {"window_title": "Fake Game", "client_size": [1280, 720], "keys": []})
+    save_events(empty, [{"t": 1.0, "type": "checkpoint", "name": "sync"}])
+    no_action = trim_session(empty, total_elapsed=2.0)
+    check(
+        "trim no action unchanged",
+        not no_action["trimmed"] and load_events(empty)[0]["t"] == 1.0,
+        f"stats={no_action}",
+    )
+    delete_session(empty)
 
 
 def test_replay(root):
@@ -715,6 +768,7 @@ def test_recorder_lifecycle(root):
     fake_window = FakeWindow(True)
     config = create_default_config()
     config["recorder"]["poll_hz"] = 100
+    config["recorder"]["trim_idle"] = False
     recorder = InputRecorder(config, fake_window, root, log=lambda message: None)
     folder = recorder.start()
     time.sleep(0.1)
@@ -742,6 +796,7 @@ def main():
     try:
         test_session_store(root)
         test_session_rename(root)
+        test_session_trim(root)
         test_replay(root)
         test_checkpoint_wait_scene(root)
         test_checkpoint_wait_visual_image(root)

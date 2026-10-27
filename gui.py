@@ -996,7 +996,7 @@ class AutomationApp(tk.Tk):
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
         ttk.Label(
             record,
-            text="录制只采集目标窗口前台时的键鼠；离开目标窗口会自动暂停。录制时自动保存画面（4 fps），停止后可用“自动加断点”生成画面状态同步。F6/F7 开始/停止，切换或触发操作后按 F5 插入同步断点。",
+            text="录制只采集目标窗口前台时的键鼠；离开目标窗口会自动暂停。停止时会自动去掉首尾空闲（从第一个操作开始、最后一个操作结束）。录制时自动保存画面（4 fps），停止后可用“自动加断点”生成画面状态同步。F6/F7 开始/停止，切换或触发操作后按 F5 插入同步断点。",
             style="Panel.TLabel",
             wraplength=760,
             justify="left",
