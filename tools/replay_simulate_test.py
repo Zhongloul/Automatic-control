@@ -11,8 +11,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.analyzer import analyze_session, apply_suggestions
+from src.clear_loop import ClearLoopRunner
 from src.config import create_default_config
 from src.imageio import imwrite
+from src.map_graph import TransitionExecutor
 from src.recorder import InputRecorder
 from src.replay import ReplayPlayer
 from src.session_store import (
@@ -318,6 +320,83 @@ def test_scene_rename(root):
     check("scene rename events", all(value == new_id for value in scenes if value), f"scenes={scenes}")
     delete_session(session)
     delete_scene(root, new_id)
+
+
+def test_transition_run_session(root):
+    calls = []
+    config = create_default_config()
+    executor = TransitionExecutor(
+        config,
+        None,
+        FakeInput(True),
+        lambda: None,
+        lambda: (0, 0, 100, 100),
+        session_runner=lambda name, speed, loops: (
+            calls.append((name, speed, loops)) or (True, "ok")
+        ),
+    )
+    executor._run_action(
+        {"type": "run_session", "session": "replay_demo", "speed": 1.5, "loops": 2}
+    )
+    check(
+        "transition run_session args",
+        calls == [("replay_demo", 1.5, 2)],
+        f"calls={calls}",
+    )
+    failing = TransitionExecutor(
+        config,
+        None,
+        FakeInput(True),
+        lambda: None,
+        lambda: (0, 0, 100, 100),
+        session_runner=lambda name, speed, loops: (False, "boom"),
+    )
+    try:
+        failing._run_action({"type": "run_session", "session": "replay_demo"})
+        failed = False
+    except RuntimeError:
+        failed = True
+    check("transition run_session failure", failed)
+
+
+def test_clear_loop(root):
+    phases = []
+    nav_calls = []
+
+    def combat():
+        phases.append("combat")
+        return True, ""
+
+    def navigate():
+        nav_calls.append(len(nav_calls) + 1)
+        return (False, "nav fail") if len(nav_calls) == 1 else (True, "nav ok")
+
+    runner = ClearLoopRunner(
+        combat,
+        navigate,
+        loops=2,
+        interval_s=0,
+        nav_retries=1,
+        log=lambda message: None,
+    )
+    result = runner.run()
+    check("clear loop success", result.success, f"message={result.message}")
+    check("clear loop count", result.loops == 2 and result.navigations == 2, f"result={result}")
+    check("clear loop nav retry", len(nav_calls) == 3, f"nav_calls={nav_calls}")
+
+    abort = __import__("threading").Event()
+    abort_runner = ClearLoopRunner(
+        lambda: (True, ""),
+        lambda: (abort.set() or True, ""),
+        loops=0,
+        interval_s=0,
+        nav_retries=0,
+        abort_event=abort,
+        log=lambda message: None,
+    )
+    abort_result = abort_runner.run()
+    check("clear loop abort", not abort_result.success, f"message={abort_result.message}")
+    check("clear loop abort stops", abort_result.loops == 1, f"loops={abort_result.loops}")
 
 
 def test_replay(root):
@@ -886,6 +965,8 @@ def main():
         test_session_rename(root)
         test_scene_rename(root)
         test_session_trim(root)
+        test_transition_run_session(root)
+        test_clear_loop(root)
         test_replay(root)
         test_checkpoint_wait_scene(root)
         test_checkpoint_wait_visual_image(root)

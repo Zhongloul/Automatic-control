@@ -45,6 +45,7 @@ class ReplayPlayer:
         self.session_folder = session_folder
         self.events = load_events(session_folder)
         self.events.sort(key=lambda event: float(event.get("t", 0.0)))
+        self._session_cache = {Path(session_folder): self.events}
         self.speed = max(0.25, min(4.0, float(speed)))
         self.loops = max(0, min(999, int(loops)))
         self.abort_event = abort_event or threading.Event()
@@ -308,9 +309,13 @@ class ReplayPlayer:
         return random.uniform(max(0.0, min(low, high)), max(0.0, max(low, high)))
 
     def _load_session_events(self, folder):
-        self.session_folder = Path(folder)
-        events = load_events(self.session_folder)
-        events.sort(key=lambda event: float(event.get("t", 0.0)))
+        folder = Path(folder)
+        events = self._session_cache.get(folder)
+        if events is None:
+            events = load_events(folder)
+            events.sort(key=lambda event: float(event.get("t", 0.0)))
+            self._session_cache[folder] = events
+        self.session_folder = folder
         self.events = events
         return bool(events)
 
@@ -446,7 +451,7 @@ class ReplayPlayer:
             return ReplayResult(False, "输入不可用：请关闭仅观察并保持目标窗口在前台", 0, 0, 0.0)
         loops_label = "无限" if self.loops == 0 else f"{self.loops} 轮"
         self.log(
-            f"开始回放 {self.session_folder} | {len(self.events)} 个事件 | {loops_label} | {self.speed:.2f}x"
+            f"开始回放 {Path(self.session_folder).name} | {loops_label} | {self.speed:.2f}x"
         )
 
         root_folder = Path(self.session_folder)

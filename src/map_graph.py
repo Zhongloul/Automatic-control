@@ -124,6 +124,7 @@ class TransitionExecutor:
         client_rect_provider,
         log=None,
         abort_event=None,
+        session_runner=None,
     ):
         self.config = config
         self.recognizer = recognizer
@@ -132,6 +133,7 @@ class TransitionExecutor:
         self.client_rect_provider = client_rect_provider
         self.log = log or (lambda message: None)
         self.abort_event = abort_event
+        self.session_runner = session_runner
         scenes_cfg = config.get("scenes") or {}
         graph_cfg = config.get("map_graph") or {}
         self.poll_interval = max(0.01, float(scenes_cfg.get("poll_interval_s", 0.2)))
@@ -207,6 +209,18 @@ class TransitionExecutor:
         if kind == "wait":
             if not self._sleep(float(action.get("seconds", 0.2))):
                 raise RuntimeError("已中止")
+            return
+        if kind in ("run_session", "run_replay"):
+            name = str(action.get("session") or "").strip()
+            if not name:
+                raise ValueError("run_session 缺少 session")
+            if self.session_runner is None:
+                raise RuntimeError("当前任务不支持运行回放会话")
+            loops = max(1, int(action.get("loops", 1) or 1))
+            speed = float(action.get("speed", 1.0) or 1.0)
+            ok, message = self.session_runner(name, speed, loops)
+            if not ok:
+                raise RuntimeError(message or f"回放会话失败: {name}")
             return
         if kind in ("click", "move"):
             pos = action.get("pos") or [0.5, 0.5]

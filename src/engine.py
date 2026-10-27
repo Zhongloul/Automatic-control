@@ -133,6 +133,17 @@ class AutomationEngine:
         self.log(f"倒计时 {int(countdown)} 秒后开始，请切回目标窗口")
         return True
 
+    def start_now(self):
+        if self._external_lock:
+            return False
+        if not self.active and not self.start():
+            return False
+        self.brain.reset(time.perf_counter())
+        self._pending_start = 0.0
+        self.running = True
+        self.log("任务直接开始运行")
+        return True
+
     def request_pause(self, reason=""):
         was_active = self.running or self._pending_start > 0
         self._pending_start = 0.0

@@ -1,6 +1,6 @@
 {
   "window": {
-    "title_keyword": "LTSerialToolV11.284",
+    "title_keyword": "功耗测试汇总_20261026.xlsx - Excel",
     "class_keyword": "",
     "auto_activate": true
   },
@@ -276,6 +276,14 @@
     "threshold_floor": 0.05,
     "threshold_cap": 0.22,
     "checkpoint_offset_s": 0.05
+  },
+  "dungeon_loop": {
+    "loops": 0,
+    "clear_hold_s": 2.0,
+    "combat_timeout_s": 120.0,
+    "enemy_seen_timeout_s": 15.0,
+    "interval_s": 2.0,
+    "nav_retries": 1
   },
   "hotkeys": {
     "toggle": "f8",

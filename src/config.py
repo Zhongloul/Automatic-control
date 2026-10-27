@@ -148,6 +148,14 @@ DEFAULT_CONFIG = {
         "threshold_cap": 0.22,
         "checkpoint_offset_s": 0.05,
     },
+    "dungeon_loop": {
+        "loops": 0,
+        "clear_hold_s": 2.0,
+        "combat_timeout_s": 120.0,
+        "enemy_seen_timeout_s": 15.0,
+        "interval_s": 2.0,
+        "nav_retries": 1,
+    },
     "hotkeys": {
         "toggle": "f8",
         "quit": "f9",

@@ -14,6 +14,7 @@ import cv2
 from PIL import Image, ImageTk
 
 from src.config import load_config, project_root, save_config
+from src.clear_loop import ClearLoopRunner
 from src.engine import AutomationEngine
 from src.hotkeys import HotkeyWatcher
 from src.imageio import imwrite
@@ -76,10 +77,10 @@ TASK_DEFS = [
     },
     {
         "id": "dungeon_loop",
-        "title": "循环流程（开发中）",
-        "desc": "清理目标 → 寻找出口 → 流程跳转 → 结算 → 自动重开。还需要目标清空判定、出口/结算识别和自动重开逻辑，当前版本未完成。",
-        "steps": "当前不可用。可先用“自动操作”清理目标，再用“流程导航”前往下一场景。",
-        "implemented": False,
+        "title": "清图循环",
+        "desc": "自动打怪，确认清图后按流程导航前往目标场景，再继续下一轮。适合清完当前地图后切图。",
+        "steps": "使用步骤：锁定窗口 → 校准/抓目标模板 → 配置场景标记和跳转 → 选择目标场景 → 设置循环次数和清图确认时间 → 开始任务。",
+        "implemented": True,
     },
     {
         "id": "replay",
@@ -559,6 +560,9 @@ class AutomationApp(tk.Tk):
         self._replay_branch_note = ""
         self._pending_replay_session = None
         self._replay_restore_pending = False
+        self._replay_log_queue = queue.Queue(maxsize=2000)
+        self._replay_log_loop = 1
+        self._replay_log_total_loops = 1
         self._last_replay_ui = 0.0
 
         self.app_version = get_version()
@@ -640,6 +644,9 @@ class AutomationApp(tk.Tk):
         self.task_status_var = tk.StringVar(value="请选择任务")
         self.task_hint_var = tk.StringVar(value="")
         self.task_goal_var = tk.StringVar(value="")
+        loop_cfg = self.config.get("dungeon_loop") or {}
+        self.loop_count_var = tk.StringVar(value=str(loop_cfg.get("loops", 0)))
+        self.clear_hold_var = tk.StringVar(value=str(loop_cfg.get("clear_hold_s", 2.0)))
         self.record_status_var = tk.StringVar(value="未录制")
         self._record_event_signature = ()
         self.replay_status_var = tk.StringVar(value="未回放")
@@ -871,6 +878,24 @@ class AutomationApp(tk.Tk):
         )
         self.task_goal_combo.pack(side="left", padx=8)
         self.task_goal_combo.bind("<<ComboboxSelected>>", lambda _event: self._refresh_task_status(force=True))
+        self.loop_count_label = ttk.Label(self.goal_frame, text="循环次数", style="Panel.TLabel")
+        self.loop_count_spin = ttk.Spinbox(
+            self.goal_frame,
+            from_=0,
+            to=999,
+            increment=1,
+            width=6,
+            textvariable=self.loop_count_var,
+        )
+        self.clear_hold_label = ttk.Label(self.goal_frame, text="清图确认(s)", style="Panel.TLabel")
+        self.clear_hold_spin = ttk.Spinbox(
+            self.goal_frame,
+            from_=0.5,
+            to=30.0,
+            increment=0.5,
+            width=6,
+            textvariable=self.clear_hold_var,
+        )
 
         buttons = ttk.Frame(detail, style="Panel.TFrame")
         buttons.grid(row=5, column=0, sticky="ew", pady=(4, 6))
@@ -1109,15 +1134,50 @@ class AutomationApp(tk.Tk):
 
         preview_frame = ttk.Frame(right, style="Panel.TFrame")
         preview_frame.grid(row=4, column=0, sticky="nsew", pady=(6, 0))
-        preview_frame.columnconfigure(0, weight=1)
-        preview_frame.rowconfigure(2, weight=1)
+        preview_frame.columnconfigure(0, weight=2)
+        preview_frame.columnconfigure(1, weight=3)
+        preview_frame.rowconfigure(0, weight=1)
+
+        log_frame = ttk.Frame(preview_frame, style="Panel.TFrame")
+        log_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(1, weight=1)
         ttk.Label(
-            preview_frame,
-            text="事件时间线（回放时自动高亮，切到实时监控可看屏幕操作）",
+            log_frame,
+            text="回放日志（实际时间 · 轮次 · 信息）",
+            style="Section.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        self.replay_log_list = tk.Listbox(
+            log_frame,
+            height=10,
+            bg=LIST_BG,
+            exportselection=False,
+            fg=LIST_FG,
+            selectbackground=ACCENT,
+            selectforeground=SELECT_FG,
+            relief="flat",
+            highlightthickness=0,
+            activestyle="none",
+            font=("Consolas", 9),
+        )
+        self.replay_log_list.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+        log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.replay_log_list.yview)
+        log_scroll.grid(row=1, column=1, sticky="ns", pady=(4, 0))
+        log_xscroll = ttk.Scrollbar(log_frame, orient="horizontal", command=self.replay_log_list.xview)
+        log_xscroll.grid(row=2, column=0, sticky="ew")
+        self.replay_log_list.configure(yscrollcommand=log_scroll.set, xscrollcommand=log_xscroll.set)
+
+        timeline_frame = ttk.Frame(preview_frame, style="Panel.TFrame")
+        timeline_frame.grid(row=0, column=1, sticky="nsew")
+        timeline_frame.columnconfigure(0, weight=1)
+        timeline_frame.rowconfigure(2, weight=1)
+        ttk.Label(
+            timeline_frame,
+            text="事件时间线（录制时间点）",
             style="Section.TLabel",
         ).grid(row=0, column=0, sticky="w")
         tk.Label(
-            preview_frame,
+            timeline_frame,
             textvariable=self.replay_current_var,
             bg=PANEL,
             fg=WARN,
@@ -1126,7 +1186,7 @@ class AutomationApp(tk.Tk):
             font=(FONT, 9, "bold"),
         ).grid(row=1, column=0, sticky="w", pady=(2, 4))
         self.event_list = tk.Listbox(
-            preview_frame,
+            timeline_frame,
             height=10,
             bg=LIST_BG,
             exportselection=False,
@@ -1139,9 +1199,11 @@ class AutomationApp(tk.Tk):
             font=("Consolas", 9),
         )
         self.event_list.grid(row=2, column=0, sticky="nsew")
-        scrollbar = ttk.Scrollbar(preview_frame, orient="vertical", command=self.event_list.yview)
+        scrollbar = ttk.Scrollbar(timeline_frame, orient="vertical", command=self.event_list.yview)
         scrollbar.grid(row=2, column=1, sticky="ns")
-        self.event_list.configure(yscrollcommand=scrollbar.set)
+        event_xscroll = ttk.Scrollbar(timeline_frame, orient="horizontal", command=self.event_list.xview)
+        event_xscroll.grid(row=3, column=0, sticky="ew")
+        self.event_list.configure(yscrollcommand=scrollbar.set, xscrollcommand=event_xscroll.set)
 
     def _show_replay_tab(self):
         self.notebook.select(self.replay_tab)
@@ -1237,6 +1299,51 @@ class AutomationApp(tk.Tk):
         self._refresh_task_status(force=True)
         self._update_replay_ui()
 
+    def _replay_log_from_thread(self, message, loop=None, total=None):
+        loop = self._replay_log_loop if loop is None else loop
+        total = self._replay_log_total_loops if total is None else total
+        item = (
+            time.strftime("%H:%M:%S"),
+            max(0, int(loop or 0)),
+            max(0, int(total or 0)),
+            str(message),
+        )
+        try:
+            self._replay_log_queue.put_nowait(item)
+        except queue.Full:
+            try:
+                self._replay_log_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._replay_log_queue.put_nowait(item)
+            except queue.Full:
+                pass
+
+    def _drain_replay_log(self):
+        messages = []
+        for _ in range(300):
+            try:
+                messages.append(self._replay_log_queue.get_nowait())
+            except queue.Empty:
+                break
+        if not messages:
+            return
+        for timestamp, loop, total, message in messages:
+            if loop <= 0:
+                prefix = "准备中"
+            else:
+                total_text = "∞" if total == 0 else str(total)
+                prefix = f"第{loop}/{total_text}轮"
+            self.replay_log_list.insert(
+                "end",
+                f"{timestamp}  {prefix}  {message}",
+            )
+        size = self.replay_log_list.size()
+        if size > 500:
+            self.replay_log_list.delete(0, size - 500)
+        self.replay_log_list.see("end")
+
     def _render_event_list(self, events):
         self.event_list.delete(0, "end")
         lines = [
@@ -1268,6 +1375,10 @@ class AutomationApp(tk.Tk):
             "total": event_total,
             "event": dict(event),
         }
+        if loop_index != self._replay_log_loop:
+            self._replay_log_loop = loop_index
+            self._replay_log_total_loops = loops_total
+            self._replay_log_from_thread("循环开始", loop_index, loops_total)
 
     def _sync_replay_highlight(self):
         current = self._replay_current
@@ -1547,6 +1658,11 @@ class AutomationApp(tk.Tk):
         self._pending_replay_session = None
         self._replay_restore_pending = False
         self._clear_replay_highlight()
+        self.replay_log_list.delete(0, "end")
+        self._replay_log_queue = queue.Queue(maxsize=2000)
+        self._replay_log_loop = 0
+        self._replay_log_total_loops = loops
+        self._replay_log_from_thread(f"准备回放 {session_path.name}", loop=0)
         self.replay_current_var.set("等待回放...")
         self._update_replay_ui()
         loops_label = "无限" if loops == 0 else f"{loops} 轮"
@@ -1563,12 +1679,14 @@ class AutomationApp(tk.Tk):
                 for remaining in range(countdown, 0, -1):
                     if abort.is_set():
                         self._replay_message = "回放已取消"
+                        self._replay_log_from_thread("回放已取消", loop=0)
                         self._log_from_thread("回放已取消")
                         return
-                    self._replay_progress = f"倒计时 {remaining} 秒，请保持目标窗口前台"
-                    self._log_from_thread(f"回放 {remaining} 秒后开始，请保持目标窗口前台")
+                    self._replay_progress = f"倒计时 {remaining} 秒，请保持目标窗口在前台"
+                    self._log_from_thread(f"回放 {remaining} 秒后开始，请保持目标窗口在前台")
                     time.sleep(1.0)
                 engine.window.activate()
+                self._replay_log_loop = 1
 
                 def on_progress(loop_index, loops_total, event_index, event_total):
                     total = "∞" if loops_total == 0 else str(loops_total)
@@ -1591,6 +1709,10 @@ class AutomationApp(tk.Tk):
                         return None
                     return scene_recognizer.recognize(frame).scene_id
 
+                def replay_log(message):
+                    self._replay_log_from_thread(message)
+                    self._log_from_thread(message)
+
                 player = ReplayPlayer(
                     config,
                     engine.window,
@@ -1600,7 +1722,7 @@ class AutomationApp(tk.Tk):
                     loops=loops,
                     loop_gap_s=loop_gap,
                     abort_event=abort,
-                    log=self._log_from_thread,
+                    log=replay_log,
                     progress=on_progress,
                     event_callback=self._on_replay_event,
                     scene_checker=scene_checker,
@@ -1610,14 +1732,16 @@ class AutomationApp(tk.Tk):
                 )
                 result = player.run()
                 prefix = "回放完成: " if result.success else "回放结束: "
-                loops_text = f"{result.loops} 轮" if loops else "无限"
+                total_text = "∞" if loops == 0 else str(loops)
                 self._replay_message = (
-                    f"{prefix}{result.message}（{loops_text}，{result.events} 事件，{result.elapsed:.1f}s）"
+                    f"{prefix}{result.message}（已回放 {result.loops}/{total_text} 轮，{result.elapsed:.1f}s）"
                 )
                 self._replay_progress = ""
+                self._replay_log_from_thread(self._replay_message)
                 self._log_from_thread(self._replay_message)
             except Exception as exc:
                 self._replay_message = f"回放异常: {exc}"
+                self._replay_log_from_thread(self._replay_message)
                 self._log_from_thread("回放异常: " + traceback.format_exc(limit=2))
             finally:
                 engine.inputs.release_all()
@@ -1637,6 +1761,7 @@ class AutomationApp(tk.Tk):
         self._replay_progress = "正在停止..."
         if self.engine is not None:
             self.engine.inputs.release_all()
+        self._replay_log_from_thread("用户停止回放")
         self._log("任务中心: 停止回放")
 
     def _refresh_record_events(self, events):
@@ -1653,6 +1778,7 @@ class AutomationApp(tk.Tk):
             self.record_event_list.see("end")
 
     def _update_replay_ui(self):
+        self._drain_replay_log()
         if self.recorder is not None and not self.recorder.recording:
             self._stop_recording()
             return
@@ -1683,12 +1809,17 @@ class AutomationApp(tk.Tk):
         if pending is not None:
             self._pending_replay_session = None
             folder, events, label = pending
-            self._replay_display_events = list(events)
-            self._replay_display_name = Path(folder).name
-            self._render_event_list(self._replay_display_events)
+            folder_name = Path(folder).name
+            is_root = str(Path(folder)) == str(self._replay_session_path)
+            already_showing = is_root and self._replay_display_name == folder_name
+            if not already_showing:
+                self._replay_display_events = list(events)
+                self._render_event_list(self._replay_display_events)
+            self._replay_display_name = folder_name
             if label:
-                self._replay_branch_note = f"分支 → {Path(folder).name}（{label}）"
-                self._log(f"回放分支跳转: {label} → {Path(folder).name}")
+                self._replay_branch_note = f"分支 → {folder_name}（{label}）"
+                self._log(f"回放分支跳转: {label} → {folder_name}")
+                self._replay_log_from_thread(self._replay_branch_note)
             else:
                 self._replay_branch_note = ""
         if not self._replay_running and self._replay_restore_pending:
@@ -1766,10 +1897,24 @@ class AutomationApp(tk.Tk):
         self.task_title_var.set(task["title"])
         self.task_desc_var.set(task["desc"])
         self.task_steps_var.set(task["steps"])
-        if task["id"] == "route":
+        if task["id"] in ("route", "dungeon_loop"):
             self.goal_frame.grid()
         else:
             self.goal_frame.grid_remove()
+        loop_widgets = (
+            self.loop_count_label,
+            self.loop_count_spin,
+            self.clear_hold_label,
+            self.clear_hold_spin,
+        )
+        if task["id"] == "dungeon_loop":
+            self.loop_count_label.pack(side="left", padx=(18, 4))
+            self.loop_count_spin.pack(side="left")
+            self.clear_hold_label.pack(side="left", padx=(18, 4))
+            self.clear_hold_spin.pack(side="left")
+        else:
+            for widget in loop_widgets:
+                widget.pack_forget()
         self._refresh_task_status(force=True)
 
     def _scene_ids_with_markers(self):
@@ -1778,6 +1923,12 @@ class AutomationApp(tk.Tk):
             if list_markers(self.root, scene_id):
                 scene_ids.append(scene_id)
         return scene_ids
+
+    def _enemy_template_count(self):
+        folder = self.root / "templates" / "enemy"
+        if not folder.is_dir():
+            return 0
+        return len(list(folder.glob("*.png"))) + len(list(folder.glob("*.jpg")))
 
     def _set_prereq(self, key, ok, text, optional=False):
         label = self.prereq_labels.get(key)
@@ -1841,11 +1992,12 @@ class AutomationApp(tk.Tk):
 
         ready_combat = window_ok and enemy_count > 0
         ready_route = window_ok and bool(markers) and bool(transitions)
+        ready_loop = ready_route and self._enemy_template_count() > 0
         ready_replay = window_ok and session_ok
         ready_map = {
             "combat": ready_combat,
             "route": ready_route,
-            "dungeon_loop": False,
+            "dungeon_loop": ready_loop,
             "replay": ready_replay,
         }
 
@@ -1877,6 +2029,21 @@ class AutomationApp(tk.Tk):
         elif task["id"] == "route":
             if not window_ok:
                 missing.append("锁定目标窗口")
+            if not markers:
+                missing.append("添加场景模板")
+            if not transitions:
+                missing.append("配置跳转流程")
+            if unmarked_scenes:
+                missing.append("为 " + "、".join(unmarked_scenes[:3]) + " 添加场景标记")
+            if not goal:
+                missing.append("选择目标场景")
+            if self.dry_var.get():
+                missing.append("关闭仅观察")
+        elif task["id"] == "dungeon_loop":
+            if not window_ok:
+                missing.append("锁定目标窗口")
+            if self._enemy_template_count() == 0:
+                missing.append("抓取目标模板")
             if not markers:
                 missing.append("添加场景模板")
             if not transitions:
@@ -1953,6 +2120,10 @@ class AutomationApp(tk.Tk):
             self.task_status_var.set(f"流程任务: {self._task_phase or '执行中'}")
         elif self.current_task == "route" and self._task_message:
             self.task_status_var.set(self._task_message)
+        elif self.current_task == "dungeon_loop" and self._task_message:
+            self.task_status_var.set(self._task_message)
+        elif self.current_task == "dungeon_loop" and self._task_running:
+            self.task_status_var.set(self._task_phase or "清图循环运行中")
         elif self.current_task == "combat" and snapshot:
             state_data = snapshot.get("state") or {}
             hp = state_data.get("hp")
@@ -2003,6 +2174,28 @@ class AutomationApp(tk.Tk):
                 messagebox.showwarning("仅观察模式", "流程任务需要真实按键，请先关闭“仅观察”。", parent=self)
                 return
             self._start_route_task(goal)
+            return
+        if task["id"] == "dungeon_loop":
+            goal = self.task_goal_var.get().strip()
+            if not goal:
+                messagebox.showwarning("缺少目标", "请先选择清图后要前往的目标场景。", parent=self)
+                return
+            if self.dry_var.get():
+                messagebox.showwarning("仅观察模式", "清图循环需要真实按键，请先关闭“仅观察”。", parent=self)
+                return
+            try:
+                loops = int(self.loop_count_var.get())
+                clear_hold = float(self.clear_hold_var.get())
+            except ValueError:
+                messagebox.showerror("参数错误", "循环次数和清图确认时间必须是数字", parent=self)
+                return
+            if not (0 <= loops <= 999):
+                messagebox.showerror("参数错误", "循环次数范围 0 ~ 999（0 表示无限）", parent=self)
+                return
+            if not (0.5 <= clear_hold <= 30.0):
+                messagebox.showerror("参数错误", "清图确认时间范围 0.5 ~ 30 秒", parent=self)
+                return
+            self._start_clear_loop_task(goal, loops, clear_hold)
             return
         if task["id"] == "replay":
             if not self.selected_session:
@@ -2076,6 +2269,39 @@ class AutomationApp(tk.Tk):
                 engine.window.activate()
                 recognizer_local = SceneRecognizer(config, root)
                 graph_local = MapGraph(config)
+
+                def scene_checker():
+                    frame = engine.current_frame()
+                    if frame is None:
+                        return None
+                    return recognizer_local.recognize(frame).scene_id
+
+                def run_session(name, speed=1.0, loops=1):
+                    session_path = Path(name)
+                    if not session_path.is_absolute():
+                        session_path = root / "sessions" / name
+                    if not (session_path / "events.jsonl").is_file():
+                        return False, f"回放会话不存在: {name}"
+                    self._log_from_thread(f"流程动作: 运行回放会话 {session_path.name}")
+                    player = ReplayPlayer(
+                        config,
+                        engine.window,
+                        engine.inputs,
+                        session_path,
+                        speed=speed,
+                        loops=loops,
+                        abort_event=abort,
+                        log=self._log_from_thread,
+                        scene_checker=scene_checker,
+                        checkpoint_immediate=True,
+                        frame_getter=engine.current_frame,
+                    )
+                    result = player.run()
+                    self._log_from_thread(
+                        f"流程回放结束: {session_path.name} | {result.message}"
+                    )
+                    return result.success, result.message
+
                 executor = TransitionExecutor(
                     config,
                     recognizer_local,
@@ -2084,6 +2310,7 @@ class AutomationApp(tk.Tk):
                     engine.window.client_rect,
                     log=self._log_from_thread,
                     abort_event=abort,
+                    session_runner=run_session,
                 )
                 router = DungeonRouter(
                     graph_local,
@@ -2108,6 +2335,203 @@ class AutomationApp(tk.Tk):
                 self._task_phase = "结束"
 
         self._task_thread = threading.Thread(target=worker, daemon=True, name="route-task")
+        self._task_thread.start()
+
+    def _start_clear_loop_task(self, goal, loops, clear_hold):
+        if self._task_running:
+            return
+        if self._record_pending or self.recorder is not None or self._replay_running:
+            messagebox.showwarning("占用中", "请先停止录制或回放，再启动清图循环。", parent=self)
+            return
+        if not self.engine.active:
+            self._rebuild_engine()
+            if not self.engine.active:
+                messagebox.showerror("无法启动", self.engine.last_error or "未找到目标窗口", parent=self)
+                return
+        recognizer = SceneRecognizer(self.config, self.root)
+        graph = MapGraph(self.config)
+        if not recognizer.enabled:
+            messagebox.showwarning("缺少场景模板", "请先在“场景 / 流程管理”中添加场景标记。", parent=self)
+            return
+        if not graph.transitions:
+            messagebox.showwarning("缺少流程", "请先在“场景 / 流程管理”中配置跳转流程。", parent=self)
+            return
+        flow_scenes = set()
+        for transition in graph.transitions:
+            flow_scenes.add(transition.from_scene)
+            flow_scenes.add(transition.to_scene)
+        unmarked = sorted(flow_scenes - set(recognizer.scene_ids))
+        if unmarked:
+            messagebox.showwarning(
+                "缺少场景标记",
+                "以下场景没有标记图片，跳转无法确认：\n" + "、".join(unmarked),
+                parent=self,
+            )
+            return
+        if goal not in recognizer.scene_ids:
+            messagebox.showwarning("目标无效", f"目标场景 {goal} 没有可用模板。", parent=self)
+            return
+        if self._enemy_template_count() == 0:
+            messagebox.showwarning("缺少目标模板", "请先在校准工具里抓取目标模板。", parent=self)
+            return
+        self.engine.request_pause("清图循环任务，自动操作暂停")
+        self._task_abort.clear()
+        self._task_running = True
+        self._task_phase = "准备"
+        self._task_message = ""
+        self._shown_task_message = ""
+        self.task_status_var.set("清图循环准备中...")
+        self._log(f"任务中心: 启动清图循环 -> {goal}，循环 {loops if loops else '无限'} 次")
+        engine = self.engine
+        config = self.config
+        root = self.root
+        abort = self._task_abort
+        loop_cfg = config.get("dungeon_loop") or {}
+        engine.set_external_lock(True, "清图循环任务占用输入，自动操作暂停")
+
+        def worker():
+            try:
+                engine.window.activate()
+                for remaining in range(3, 0, -1):
+                    if abort.is_set():
+                        self._task_message = "清图循环已停止"
+                        self._log_from_thread("清图循环已停止")
+                        return
+                    self._task_phase = f"倒计时 {remaining} 秒"
+                    self._log_from_thread(f"清图循环 {remaining} 秒后开始，请保持目标窗口在前台")
+                    time.sleep(1.0)
+                engine.window.activate()
+                recognizer_local = SceneRecognizer(config, root)
+                graph_local = MapGraph(config)
+
+                def scene_checker():
+                    frame = engine.current_frame()
+                    if frame is None:
+                        return None
+                    return recognizer_local.recognize(frame).scene_id
+
+                def run_session(name, speed=1.0, replay_loops=1):
+                    session_path = Path(name)
+                    if not session_path.is_absolute():
+                        session_path = root / "sessions" / name
+                    if not (session_path / "events.jsonl").is_file():
+                        return False, f"回放会话不存在: {name}"
+                    self._log_from_thread(f"清图循环: 运行回放会话 {session_path.name}")
+                    player = ReplayPlayer(
+                        config,
+                        engine.window,
+                        engine.inputs,
+                        session_path,
+                        speed=speed,
+                        loops=replay_loops,
+                        abort_event=abort,
+                        log=self._log_from_thread,
+                        scene_checker=scene_checker,
+                        checkpoint_immediate=True,
+                        frame_getter=engine.current_frame,
+                    )
+                    result = player.run()
+                    return result.success, result.message
+
+                def combat_phase():
+                    engine.set_external_lock(False)
+                    engine.window.activate()
+                    self._task_phase = "清图中"
+                    if not engine.start_now():
+                        return False, "无法启动智能操作"
+                    start = time.perf_counter()
+                    seen_enemy = False
+                    clear_since = None
+                    timeout = float(loop_cfg.get("combat_timeout_s", 120.0))
+                    seen_timeout = float(loop_cfg.get("enemy_seen_timeout_s", 15.0))
+                    while True:
+                        if abort.is_set():
+                            engine.request_pause("清图循环已停止")
+                            return False, "清图循环已停止"
+                        if not engine.running:
+                            engine.window.activate()
+                            if not engine.start_now():
+                                return False, "智能操作未能启动"
+                        snapshot = engine.snapshot()
+                        state = snapshot.get("state") or {}
+                        enemies = state.get("enemies") or []
+                        now = time.perf_counter()
+                        if enemies:
+                            seen_enemy = True
+                            clear_since = None
+                        elif seen_enemy:
+                            if clear_since is None:
+                                clear_since = now
+                            elif now - clear_since >= clear_hold:
+                                break
+                        if now - start > timeout:
+                            engine.request_pause("清图超时")
+                            return False, "清图超时，未检测到目标清空"
+                        if not seen_enemy and now - start > seen_timeout:
+                            engine.request_pause("未检测到目标")
+                            return False, "未检测到目标，请检查目标模板和校准"
+                        time.sleep(0.1)
+                    engine.request_pause("清图完成")
+                    return True, "清图完成"
+
+                def navigate_phase():
+                    engine.set_external_lock(True)
+                    engine.window.activate()
+                    self._task_phase = f"导航 → {goal}"
+                    executor = TransitionExecutor(
+                        config,
+                        recognizer_local,
+                        engine.inputs,
+                        engine.current_frame,
+                        engine.window.client_rect,
+                        log=self._log_from_thread,
+                        abort_event=abort,
+                        session_runner=run_session,
+                    )
+                    router = DungeonRouter(
+                        graph_local,
+                        recognizer_local,
+                        executor,
+                        engine.current_frame,
+                        log=self._log_from_thread,
+                        abort_event=abort,
+                    )
+                    result = router.run_to(goal)
+                    return result.success, result.message
+
+                def on_progress(loop_index, loops_total, phase):
+                    total = "∞" if loops_total == 0 else str(loops_total)
+                    label = "清图" if phase == "combat" else "导航"
+                    self._task_phase = f"{label} 第 {loop_index}/{total} 轮"
+
+                runner = ClearLoopRunner(
+                    combat_phase,
+                    navigate_phase,
+                    loops=loops,
+                    interval_s=float(loop_cfg.get("interval_s", 2.0)),
+                    nav_retries=int(loop_cfg.get("nav_retries", 1)),
+                    abort_event=abort,
+                    log=self._log_from_thread,
+                    progress=on_progress,
+                )
+                result = runner.run()
+                prefix = "清图循环完成: " if result.success else "清图循环结束: "
+                self._task_message = prefix + result.message
+                self._log_from_thread(self._task_message)
+            except Exception as exc:
+                self._task_message = f"清图循环异常: {exc}"
+                self._log_from_thread("清图循环异常: " + traceback.format_exc(limit=2))
+            finally:
+                try:
+                    engine.request_pause("清图循环结束")
+                    engine.inputs.release_all()
+                except Exception:
+                    pass
+                engine.set_external_lock(False)
+                self._task_running = False
+                self._task_phase = "结束"
+
+        self._task_thread = threading.Thread(target=worker, daemon=True, name="clear-loop-task")
         self._task_thread.start()
 
     def _stop_task(self):

@@ -26,7 +26,7 @@ from .ui_common import hide_window_if_testing
 
 FONT = "Microsoft YaHei UI"
 
-ACTION_TYPES = ("key_tap", "key", "key_hold", "wait", "click", "move")
+ACTION_TYPES = ("key_tap", "key", "key_hold", "wait", "click", "move", "run_session")
 
 
 def dark_checkbutton(parent, text, variable, command=None):
@@ -71,6 +71,8 @@ def validate_actions(actions):
             return False, f"第 {index} 个 key_hold 缺少 seconds"
         if kind == "wait" and not isinstance(action.get("seconds"), (int, float)):
             return False, f"第 {index} 个 wait 缺少 seconds"
+        if kind == "run_session" and not str(action.get("session") or "").strip():
+            return False, f"第 {index} 个 run_session 缺少 session"
         if kind in ("click", "move"):
             pos = action.get("pos")
             if not isinstance(pos, (list, tuple)) or len(pos) != 2:
@@ -476,7 +478,7 @@ class TransitionEditorWindow(tk.Toplevel):
         actions_frame.rowconfigure(1, weight=1)
         ttk.Label(
             actions_frame,
-            text='动作 JSON（支持 key_tap / key_hold / wait / click / move）',
+            text='动作 JSON（支持 key_tap / key_hold / wait / click / move / run_session）',
             style="Panel.TLabel",
         ).grid(row=0, column=0, sticky="w")
         actions_text = json.dumps(data.get("actions") or [], ensure_ascii=False, indent=2)

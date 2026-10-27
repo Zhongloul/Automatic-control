@@ -56,6 +56,22 @@ def main():
     app = gui.AutomationApp()
     assert not app.winfo_viewable(), "GUI smoke test must run hidden"
     assert icon_path() is not None, "application icon missing"
+    loop_index = next(
+        index for index, task in enumerate(gui.TASK_DEFS) if task["id"] == "dungeon_loop"
+    )
+    app.task_list.selection_clear(0, "end")
+    app.task_list.selection_set(loop_index)
+    app._on_task_select()
+    assert app.loop_count_spin.winfo_manager() == "pack"
+    assert app.clear_hold_spin.winfo_manager() == "pack"
+    app.task_list.selection_clear(0, "end")
+    app.task_list.selection_set(0)
+    app._on_task_select()
+    app._replay_log_from_thread("日志测试", loop=2, total=26)
+    app._drain_replay_log()
+    assert app.replay_log_list.size() >= 1
+    assert "第2/26轮" in app.replay_log_list.get("end")
+    app.replay_log_list.delete(0, "end")
     errors = []
 
     def report(exc, value, tb):
