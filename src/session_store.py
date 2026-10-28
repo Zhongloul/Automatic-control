@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import stat
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,10 +23,63 @@ def sessions_dir(root):
     return Path(root) / "sessions"
 
 
+def _clear_readonly(path):
+    path = Path(path)
+    if not path.exists():
+        return
+    try:
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+    except OSError:
+        pass
+
+
+def _replace_with_retry(source, target, attempts=5):
+    target = Path(target)
+    for attempt in range(attempts):
+        try:
+            _clear_readonly(target)
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt >= attempts - 1:
+                raise
+            time.sleep(0.3)
+
+
+def prepare_session(folder):
+    folder = Path(folder)
+    if not folder.is_dir():
+        raise FileNotFoundError(str(folder))
+    _clear_readonly(folder)
+    for name in ("events.jsonl", "events.jsonl.bak", "meta.json"):
+        _clear_readonly(folder / name)
+    probe = folder / ".write_test"
+    try:
+        with open(probe, "w", encoding="utf-8") as handle:
+            handle.write("ok")
+        probe.unlink(missing_ok=True)
+    except OSError as exc:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise PermissionError(f"会话目录不可写: {folder} ({exc})") from exc
+
+
 def _write_json(path, data):
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
+    _clear_readonly(path.parent)
+    temp = path.with_name(path.name + ".tmp")
+    _clear_readonly(temp)
+    with open(temp, "w", encoding="utf-8") as handle:
         json.dump(data, handle, ensure_ascii=False, indent=2)
+        handle.flush()
+        try:
+            os.fsync(handle.fileno())
+        except OSError:
+            pass
+    _replace_with_retry(temp, path)
 
 
 def create_session(root, meta):
@@ -72,17 +126,27 @@ def append_event(handle, event):
 
 def save_events(folder, events):
     folder = Path(folder)
+    prepare_session(folder)
     path = folder / "events.jsonl"
     if path.is_file():
         try:
-            shutil.copy2(path, folder / "events.jsonl.bak")
+            backup = folder / "events.jsonl.bak"
+            _clear_readonly(backup)
+            shutil.copy2(path, backup)
+            _clear_readonly(backup)
         except OSError:
             pass
     temp = folder / "events.jsonl.tmp"
+    _clear_readonly(temp)
     with open(temp, "w", encoding="utf-8") as handle:
         for event in events:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
-    os.replace(temp, path)
+        handle.flush()
+        try:
+            os.fsync(handle.fileno())
+        except OSError:
+            pass
+    _replace_with_retry(temp, path)
 
 
 def load_events(folder, limit=None):

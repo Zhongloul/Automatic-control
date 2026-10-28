@@ -1,12 +1,31 @@
 import copy
 import json
+import os
+import stat
 import sys
+import time
 from pathlib import Path
 
 DEFAULT_RECORD_KEYS = (
     [chr(code) for code in range(ord("a"), ord("z") + 1)]
     + [str(digit) for digit in range(10)]
-    + ["space", "shift", "ctrl", "alt", "enter", "tab", "up", "down", "left", "right"]
+    + [
+        "space", "shift", "ctrl", "alt", "enter", "tab",
+        "up", "down", "left", "right",
+        "esc", "backspace", "insert", "delete", "home", "end",
+        "pageup", "pagedown", "capslock", "printscreen", "pause",
+        "`", "-", "=", "[", "]", "\\", ";", "'", ",", ".", "/",
+    ]
+    + [f"f{index}" for index in range(1, 25)]
+    + [f"numpad{index}" for index in range(10)]
+    + [
+        "numpad_multiply",
+        "numpad_add",
+        "numpad_separator",
+        "numpad_subtract",
+        "numpad_decimal",
+        "numpad_divide",
+    ]
 )
 
 DEFAULT_CONFIG = {
@@ -14,6 +33,7 @@ DEFAULT_CONFIG = {
         "title_keyword": "",
         "class_keyword": "",
         "auto_activate": True,
+        "topmost": False,
     },
     "capture": {
         "backend": "auto",
@@ -122,6 +142,7 @@ DEFAULT_CONFIG = {
         "sessions_dir": "sessions",
         "poll_hz": 125,
         "record_mouse_move": False,
+        "record_all_keys": True,
         "frame_sample_hz": 4.0,
         "frame_max_width": 480,
         "keys": DEFAULT_RECORD_KEYS,
@@ -204,8 +225,30 @@ def load_config(path):
 def save_config(path, config):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
+    temp = path.with_name(path.name + ".tmp")
+    try:
+        os.chmod(temp, stat.S_IREAD | stat.S_IWRITE)
+    except OSError:
+        pass
+    with open(temp, "w", encoding="utf-8") as handle:
         json.dump(config, handle, ensure_ascii=False, indent=2)
+        handle.flush()
+        try:
+            os.fsync(handle.fileno())
+        except OSError:
+            pass
+    for attempt in range(3):
+        try:
+            try:
+                os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+            except OSError:
+                pass
+            os.replace(temp, path)
+            return
+        except PermissionError:
+            if attempt >= 2:
+                raise
+            time.sleep(0.15)
 
 
 def project_root():

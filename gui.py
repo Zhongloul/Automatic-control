@@ -17,6 +17,7 @@ from src.config import load_config, project_root, save_config
 from src.clear_loop import ClearLoopRunner
 from src.engine import AutomationEngine
 from src.hotkeys import HotkeyWatcher
+from src.hotkey_ui import HotkeySettingsWindow
 from src.imageio import imwrite
 from src.map_graph import DungeonRouter, MapGraph, TransitionExecutor
 from src.overlay import draw_overlay
@@ -528,6 +529,7 @@ class AutomationApp(tk.Tk):
         self._scene_manager = None
         self._checkpoint_editor = None
         self._analyzer_window = None
+        self._hotkey_window = None
         self._task_thread = None
         self._task_abort = threading.Event()
         self._task_running = False
@@ -551,6 +553,7 @@ class AutomationApp(tk.Tk):
         self._replay_message = ""
         self._record_message = ""
         self._session_infos = []
+        self._session_access_error = ""
         self._session_events = []
         self._replay_current = None
         self._replay_highlight_index = None
@@ -579,6 +582,8 @@ class AutomationApp(tk.Tk):
         self._build_styles()
         self._init_vars()
         self._build_ui()
+        self._refresh_hotkey_labels()
+        self._apply_topmost()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._create_engine()
         self._log(f"界面已启动 v{self.app_version}")
@@ -629,6 +634,7 @@ class AutomationApp(tk.Tk):
     def _init_vars(self):
         self.title_var = tk.StringVar(value=self.config["window"].get("title_keyword", ""))
         self.window_info_var = tk.StringVar(value="未锁定")
+        self._topmost = bool((self.config.get("window") or {}).get("topmost", False))
         self.run_state_var = tk.StringVar(value="未启动")
         self.capture_var = tk.StringVar(value="-")
         self.hp_var = tk.StringVar(value="-")
@@ -648,6 +654,9 @@ class AutomationApp(tk.Tk):
         self.loop_count_var = tk.StringVar(value=str(loop_cfg.get("loops", 0)))
         self.clear_hold_var = tk.StringVar(value=str(loop_cfg.get("clear_hold_s", 2.0)))
         self.record_status_var = tk.StringVar(value="未录制")
+        self.record_all_var = tk.BooleanVar(
+            value=bool((self.config.get("recorder") or {}).get("record_all_keys", True))
+        )
         self._record_event_signature = ()
         self.replay_status_var = tk.StringVar(value="未回放")
         self.replay_current_var = tk.StringVar(value="当前事件: -")
@@ -678,6 +687,15 @@ class AutomationApp(tk.Tk):
         title_row = ttk.Frame(header)
         title_row.grid(row=0, column=0, columnspan=5, sticky="ew", pady=(0, 8))
         ttk.Label(title_row, text=f"自动化控制台 v{self.app_version}", style="Title.TLabel").pack(side="left")
+        ttk.Button(title_row, text="热键设置", command=self._open_hotkey_settings).pack(
+            side="right", padx=(0, 12)
+        )
+        self.topmost_button = ttk.Button(
+            title_row,
+            text="取消置顶" if self._topmost else "窗口置顶",
+            command=self._toggle_topmost,
+        )
+        self.topmost_button.pack(side="right", padx=(0, 12))
         ttk.Label(title_row, textvariable=self.window_info_var, foreground=WARN).pack(side="right")
 
         ttk.Label(header, text="目标窗口标题").grid(row=1, column=0, sticky="w")
@@ -702,11 +720,12 @@ class AutomationApp(tk.Tk):
         left.rowconfigure(0, weight=1)
         self.preview_canvas = tk.Canvas(left, bg=CANVAS_BG, highlightthickness=0)
         self.preview_canvas.grid(row=0, column=0, sticky="nsew")
-        ttk.Label(
+        self.monitor_hint_label = ttk.Label(
             left,
             text="提示：运行时请保持目标窗口前台；F8 开始/继续，F9 暂停，F1 开关叠加层。",
             style="Muted.TLabel",
-        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
+        )
+        self.monitor_hint_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
 
         right = ttk.Frame(self.monitor_tab, style="Panel.TFrame", padding=14)
         right.grid(row=0, column=1, sticky="nsew", padx=(0, 4), pady=4)
@@ -1031,17 +1050,25 @@ class AutomationApp(tk.Tk):
             justify="left",
             font=(FONT, 9),
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
-        ttk.Label(
+        self.record_hint_label = ttk.Label(
             record,
             text="录制只采集目标窗口前台键鼠；停止后可在“编辑”里裁剪/加断点。F6/F7 开始/停止，触发切换后按 F5 插入同步断点。",
             style="Panel.TLabel",
             wraplength=760,
             justify="left",
-        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        )
+        self.record_hint_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.record_all_check = dark_checkbutton(
+            record,
+            "录制所有按键（程序热键除外）",
+            self.record_all_var,
+            self._toggle_record_all,
+        )
+        self.record_all_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
         self.record_events_label = ttk.Label(record, text="录制事件（最近 4 条）", style="Panel.TLabel")
-        self.record_events_label.grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.record_events_label.grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.record_events_frame = ttk.Frame(record, style="Panel.TFrame")
-        self.record_events_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        self.record_events_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(2, 0))
         self.record_events_frame.columnconfigure(0, weight=1)
         self.record_event_list = tk.Listbox(
             self.record_events_frame,
@@ -1218,7 +1245,21 @@ class AutomationApp(tk.Tk):
 
     def _refresh_sessions(self, select_path=None):
         current = select_path or self.selected_session
-        self._session_infos = list_sessions(self.root)
+        try:
+            self._session_infos = list_sessions(self.root)
+            self._session_access_error = ""
+        except Exception as exc:
+            if self._session_access_error != str(exc):
+                self._session_access_error = str(exc)
+                messagebox.showerror(
+                    "会话目录无法访问",
+                    f"无法读取会话目录：\n{sessions_dir(self.root)}\n\n{exc}",
+                    parent=self,
+                )
+            self._session_infos = []
+            self.session_info_var.set("会话目录无法访问")
+            self._set_event_preview([])
+            return
         self.session_list.delete(0, "end")
         for info in self._session_infos:
             minutes = int(info.duration // 60)
@@ -1294,7 +1335,17 @@ class AutomationApp(tk.Tk):
         if len(info.client_size) >= 2:
             detail += f" | 客户区 {info.client_size[0]}x{info.client_size[1]}"
         self.session_info_var.set(detail)
-        events = sorted(load_events(info.path), key=lambda event: float(event.get("t", 0.0)))
+        try:
+            events = sorted(load_events(info.path), key=lambda event: float(event.get("t", 0.0)))
+        except Exception as exc:
+            self.session_info_var.set(f"{detail} | 无法访问")
+            self._set_event_preview([])
+            messagebox.showerror(
+                "会话无法访问",
+                f"无法读取会话文件：\n{info.path}\n\n{exc}",
+                parent=self,
+            )
+            return
         self._set_event_preview(events)
         self._refresh_task_status(force=True)
         self._update_replay_ui()
@@ -1443,6 +1494,99 @@ class AutomationApp(tk.Tk):
             f"{format_replay_event(event)}"
         )
 
+    def _apply_topmost(self):
+        try:
+            self.attributes("-topmost", bool(self._topmost))
+        except tk.TclError:
+            pass
+        if hasattr(self, "topmost_button"):
+            self.topmost_button.configure(text="取消置顶" if self._topmost else "窗口置顶")
+
+    def _toggle_topmost(self):
+        self._topmost = not self._topmost
+        self._apply_topmost()
+        self.config.setdefault("window", {})["topmost"] = self._topmost
+        try:
+            save_config(self.config_path, self.config)
+        except Exception as exc:
+            self._log(f"置顶状态已切换，但保存配置失败: {exc}")
+        self._log("窗口置顶: " + ("开启" if self._topmost else "关闭"))
+
+    def _toggle_record_all(self):
+        value = bool(self.record_all_var.get())
+        self.config.setdefault("recorder", {})["record_all_keys"] = value
+        try:
+            save_config(self.config_path, self.config)
+        except Exception as exc:
+            self._log(f"录制按键设置已切换，但保存配置失败: {exc}")
+        self._log("录制模式: " + ("所有按键（热键除外）" if value else "白名单"))
+
+    def _open_hotkey_settings(self):
+        if (
+            self._task_running
+            or self._replay_running
+            or self.recorder is not None
+            or self._record_pending
+            or self.engine.running
+            or self.engine.snapshot().get("pending")
+        ):
+            messagebox.showwarning("占用中", "请先停止录制、回放、任务或自动操作，再修改热键。", parent=self)
+            return
+        try:
+            if self._hotkey_window is not None and self._hotkey_window.winfo_exists():
+                self._hotkey_window.lift()
+                return
+        except tk.TclError:
+            self._hotkey_window = None
+        self._hotkey_window = HotkeySettingsWindow(
+            self,
+            self.config.get("hotkeys") or {},
+            self._apply_hotkeys,
+        )
+
+    def _apply_hotkeys(self, hotkeys):
+        self.config.setdefault("hotkeys", {}).update(hotkeys)
+        save_config(self.config_path, self.config)
+        if self.engine is not None and self.engine.active:
+            try:
+                self._rebuild_engine()
+            except Exception as exc:
+                self._log(f"热键已保存，但重载窗口失败: {exc}")
+        self._refresh_hotkey_labels()
+        self._log(
+            "热键已更新: " + "，".join(f"{key}={value.upper()}" for key, value in hotkeys.items())
+        )
+
+    def _refresh_hotkey_labels(self):
+        hotkeys = self.config.get("hotkeys") or {}
+
+        def label(key, default):
+            value = hotkeys[key] if key in hotkeys else default
+            text = str(value or "").strip().upper()
+            return text or "无"
+
+        toggle = label("toggle", "f8")
+        quit_key = label("quit", "f9")
+        debug = label("debug", "f1")
+        record_toggle = label("record_toggle", "f6")
+        record_stop = label("record_stop", "f7")
+        checkpoint = label("record_checkpoint", "f5")
+        self.start_button.configure(text=f"开始 / 继续  {toggle}")
+        self.pause_button.configure(text=f"暂停  {quit_key}")
+        self.task_pause_button.configure(text=f"停止 / 暂停  {quit_key}")
+        self.record_start_button.configure(text=f"开始录制  {record_toggle}")
+        self.record_stop_button.configure(text=f"停止并保存  {record_stop}")
+        self.replay_stop_button.configure(text=f"停止回放  {quit_key}")
+        self.monitor_hint_label.configure(
+            text=f"提示：运行时请保持目标窗口前台；{toggle} 开始/继续，{quit_key} 暂停，{debug} 开关叠加层。"
+        )
+        self.record_hint_label.configure(
+            text=(
+                "录制只采集目标窗口前台键鼠；停止后可在“编辑”里裁剪/加断点。"
+                f"{record_toggle}/{record_stop} 开始/停止，触发切换后按 {checkpoint} 插入同步断点。"
+            )
+        )
+
     def _open_checkpoint_editor(self):
         if self._task_running or self._replay_running or self.recorder is not None or self._record_pending:
             messagebox.showwarning("占用中", "请先停止录制、回放或流程任务，再编辑会话。", parent=self)
@@ -1456,12 +1600,20 @@ class AutomationApp(tk.Tk):
                 return
         except tk.TclError:
             self._checkpoint_editor = None
-        self._checkpoint_editor = CheckpointEditorWindow(
-            self,
-            self.root,
-            self.selected_session,
-            on_saved=self._on_checkpoints_saved,
-        )
+        try:
+            self._checkpoint_editor = CheckpointEditorWindow(
+                self,
+                self.root,
+                self.selected_session,
+                on_saved=self._on_checkpoints_saved,
+            )
+        except Exception as exc:
+            self._checkpoint_editor = None
+            messagebox.showerror(
+                "无法编辑会话",
+                f"无法打开会话文件：\n{self.selected_session}\n\n{exc}",
+                parent=self,
+            )
 
     def _on_checkpoints_saved(self):
         self._log("断点已写入会话")
@@ -1547,6 +1699,7 @@ class AutomationApp(tk.Tk):
             self._record_message = "录制启动失败：窗口未锁定"
             self.record_status_var.set(self._record_message)
             return
+        self.config.setdefault("recorder", {})["record_all_keys"] = bool(self.record_all_var.get())
         self.recorder = InputRecorder(
             self.config,
             self.engine.window,

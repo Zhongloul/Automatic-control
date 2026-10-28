@@ -1199,7 +1199,19 @@ class CheckpointEditorWindow(tk.Toplevel):
             meta["duration"] = round(duration, 3)
             write_meta(self.folder, meta)
         except Exception as exc:
-            messagebox.showerror("写入失败", str(exc), parent=self)
+            if isinstance(exc, PermissionError):
+                detail = (
+                    "程序目录没有写权限，或文件被设为只读/被其他程序占用。\n"
+                    "请把程序放到有写权限的目录（例如桌面、文档），"
+                    "或取消会话文件的只读属性后重试。"
+                )
+            else:
+                detail = "请确认程序目录有写权限，且会话文件没有被其他程序占用。"
+            messagebox.showerror(
+                "保存失败",
+                f"无法写入会话文件：\n{self.folder}\n\n{detail}\n\n{exc}",
+                parent=self,
+            )
             return False
         self.dirty = False
         self._saved_state = self._dirty_signature()

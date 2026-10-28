@@ -124,9 +124,54 @@ VK_MAP.update(
         "/": 0xBF,
         "printscreen": 0x2C,
         "pause": 0x13,
+        "shift_l": 0xA0,
+        "shift_r": 0xA1,
+        "ctrl_l": 0xA2,
+        "ctrl_r": 0xA3,
+        "alt_l": 0xA4,
+        "alt_r": 0xA5,
+        "apps": 0x5D,
+        "menu": 0x5D,
+        "win": 0x5B,
+        "lwin": 0x5B,
+        "rwin": 0x5C,
+        "numpad0": 0x60,
+        "numpad1": 0x61,
+        "numpad2": 0x62,
+        "numpad3": 0x63,
+        "numpad4": 0x64,
+        "numpad5": 0x65,
+        "numpad6": 0x66,
+        "numpad7": 0x67,
+        "numpad8": 0x68,
+        "numpad9": 0x69,
+        "numpad_multiply": 0x6A,
+        "numpad_add": 0x6B,
+        "numpad_separator": 0x6C,
+        "numpad_subtract": 0x6D,
+        "numpad_decimal": 0x6E,
+        "numpad_divide": 0x6F,
+        "browser_back": 0xA6,
+        "browser_forward": 0xA7,
+        "browser_refresh": 0xA8,
+        "browser_stop": 0xA9,
+        "browser_search": 0xAA,
+        "browser_favorites": 0xAB,
+        "browser_home": 0xAC,
+        "volume_mute": 0xAD,
+        "volume_down": 0xAE,
+        "volume_up": 0xAF,
+        "media_next": 0xB0,
+        "media_prev": 0xB1,
+        "media_stop": 0xB2,
+        "media_play": 0xB3,
+        "launch_mail": 0xB4,
+        "launch_media": 0xB5,
+        "launch_app1": 0xB6,
+        "launch_app2": 0xB7,
     }
 )
-for _index in range(1, 13):
+for _index in range(1, 25):
     VK_MAP[f"f{_index}"] = 0x6F + _index
 
 EXTENDED_KEYS = {
@@ -143,6 +188,37 @@ EXTENDED_KEYS = {
     "pagedown",
     "numlock",
     "printscreen",
+    "ctrl_r",
+    "alt_r",
+    "apps",
+    "menu",
+    "win",
+    "lwin",
+    "rwin",
+    "numpad_divide",
+}
+
+VK_ONLY_KEYS = {
+    "pause",
+    "numpad_separator",
+    "browser_back",
+    "browser_forward",
+    "browser_refresh",
+    "browser_stop",
+    "browser_search",
+    "browser_favorites",
+    "browser_home",
+    "volume_mute",
+    "volume_down",
+    "volume_up",
+    "media_next",
+    "media_prev",
+    "media_stop",
+    "media_play",
+    "launch_mail",
+    "launch_media",
+    "launch_app1",
+    "launch_app2",
 }
 
 
@@ -150,30 +226,31 @@ def resolve_key(name):
     if isinstance(name, int):
         vk = name
         extended = False
+        key = ""
     else:
         key = str(name).strip().lower()
         if key not in VK_MAP:
             raise ValueError(f"不支持的按键名: {name}")
         vk = VK_MAP[key]
         extended = key in EXTENDED_KEYS
-    scan = user32.MapVirtualKeyW(vk, 0)
-    if scan == 0:
-        raise ValueError(f"无法映射按键扫描码: {name}")
+    scan = 0 if key in VK_ONLY_KEYS else user32.MapVirtualKeyW(vk, 0)
     return vk, scan, extended
 
 
-def _send_key(scan, extended, keyup):
-    flags = KEYEVENTF_SCANCODE
+def _send_key(vk, scan, extended, keyup):
+    flags = 0
+    if scan:
+        flags |= KEYEVENTF_SCANCODE
+        if extended:
+            flags |= KEYEVENTF_EXTENDEDKEY
     if keyup:
         flags |= KEYEVENTF_KEYUP
-    if extended:
-        flags |= KEYEVENTF_EXTENDEDKEY
     event = INPUT(
         type=INPUT_KEYBOARD,
         data=_INPUTUNION(
             ki=KEYBDINPUT(
-                wVk=0,
-                wScan=scan,
+                wVk=0 if scan else int(vk),
+                wScan=int(scan),
                 dwFlags=flags,
                 time=0,
                 dwExtraInfo=0,
@@ -224,16 +301,16 @@ class InputController:
             return True
         if not self._allowed():
             return False
-        _vk, scan, extended = resolve_key(key)
-        _send_key(scan, extended, False)
+        vk, scan, extended = resolve_key(key)
+        _send_key(vk, scan, extended, False)
         self.pressed.add(key)
         return True
 
     def key_up(self, name):
         key = str(name).strip().lower()
         self.pressed.discard(key)
-        _vk, scan, extended = resolve_key(key)
-        _send_key(scan, extended, True)
+        vk, scan, extended = resolve_key(key)
+        _send_key(vk, scan, extended, True)
 
     def hold(self, name, duration=None):
         if duration is None:

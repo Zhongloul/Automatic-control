@@ -1,5 +1,7 @@
 import json
+import os
 import shutil
+import stat
 import sys
 import time
 from pathlib import Path
@@ -12,8 +14,9 @@ if str(ROOT) not in sys.path:
 
 from src.analyzer import analyze_session, apply_suggestions
 from src.clear_loop import ClearLoopRunner
-from src.config import create_default_config
+from src.config import DEFAULT_RECORD_KEYS, create_default_config
 from src.imageio import imwrite
+from src.input import VK_MAP, resolve_key
 from src.map_graph import TransitionExecutor
 from src.recorder import InputRecorder
 from src.replay import ReplayPlayer
@@ -145,6 +148,26 @@ def test_session_store(root):
     check("session backup created", (folder / "events.jsonl.bak").is_file())
     delete_session(folder)
     check("session deleted", not folder.exists())
+
+
+def test_readonly_session_save(root):
+    folder = create_session(root, {"window_title": "Fake Game", "client_size": [1280, 720], "keys": []})
+    save_events(folder, [{"t": 0.0, "type": "key_down", "key": "a"}])
+    events_path = folder / "events.jsonl"
+    meta_path = folder / "meta.json"
+    os.chmod(events_path, stat.S_IREAD)
+    os.chmod(meta_path, stat.S_IREAD)
+    save_events(folder, [{"t": 0.0, "type": "key_down", "key": "b"}])
+    meta = read_meta(folder)
+    meta["event_count"] = 1
+    write_meta(folder, meta)
+    events = load_events(folder)
+    check(
+        "readonly session save",
+        len(events) == 1 and events[0].get("key") == "b" and read_meta(folder).get("event_count") == 1,
+        f"events={events}",
+    )
+    delete_session(folder)
 
 
 def test_session_rename(root):
@@ -397,6 +420,48 @@ def test_clear_loop(root):
     abort_result = abort_runner.run()
     check("clear loop abort", not abort_result.success, f"message={abort_result.message}")
     check("clear loop abort stops", abort_result.loops == 1, f"loops={abort_result.loops}")
+
+
+def test_key_mapping(root):
+    bad = []
+    for key in DEFAULT_RECORD_KEYS:
+        try:
+            resolve_key(key)
+        except Exception as exc:
+            bad.append((key, str(exc)))
+    check("key mapping complete", not bad, f"bad={bad}")
+    config = create_default_config()
+    for key in config["recorder"].get("keys") or []:
+        try:
+            resolve_key(key)
+        except Exception as exc:
+            bad.append((key, str(exc)))
+    check("config key mapping complete", not bad, f"bad={bad}")
+    for key in VK_MAP:
+        try:
+            resolve_key(key)
+        except Exception as exc:
+            bad.append((key, str(exc)))
+    check("VK map resolve complete", not bad, f"bad={bad}")
+    config = create_default_config()
+    recorder = InputRecorder(config, FakeWindow(True), root, log=lambda message: None)
+    check(
+        "record all keys default",
+        "shift_l" in recorder.keys
+        and "shift" not in recorder.keys
+        and "volume_up" in recorder.keys
+        and "f2" in recorder.keys
+        and "f8" not in recorder.keys,
+        f"keys={recorder.keys[:10]}...",
+    )
+    config["hotkeys"]["toggle"] = "f2"
+    config["recorder"]["keys"] = list(DEFAULT_RECORD_KEYS)
+    recorder = InputRecorder(config, FakeWindow(True), root, log=lambda message: None)
+    check(
+        "hotkey filter dynamic",
+        "f2" not in recorder.keys and "f8" in recorder.keys,
+        f"keys_have_f2={'f2' in recorder.keys} f8={'f8' in recorder.keys}",
+    )
 
 
 def test_replay(root):
@@ -931,6 +996,11 @@ def test_recorder_lifecycle(root):
     config = create_default_config()
     config["recorder"]["poll_hz"] = 100
     recorder = InputRecorder(config, fake_window, root, log=lambda message: None)
+    check(
+        "recorder f keys",
+        "f2" in recorder.keys and "f8" not in recorder.keys,
+        f"keys={recorder.keys}",
+    )
     folder = recorder.start()
     time.sleep(0.1)
     inserted = recorder.insert_checkpoint("sync")
@@ -962,6 +1032,8 @@ def main():
     root.mkdir(parents=True)
     try:
         test_session_store(root)
+        test_readonly_session_save(root)
+        test_key_mapping(root)
         test_session_rename(root)
         test_scene_rename(root)
         test_session_trim(root)

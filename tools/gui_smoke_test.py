@@ -72,6 +72,16 @@ def main():
     assert app.replay_log_list.size() >= 1
     assert "第2/26轮" in app.replay_log_list.get("end")
     app.replay_log_list.delete(0, "end")
+    app._open_hotkey_settings()
+    hotkey_window = app._hotkey_window
+    assert hotkey_window is not None and not hotkey_window.winfo_viewable()
+    hotkey_window.vars["quit"].set("F8")
+    result, _error = hotkey_window._collect()
+    assert result is None
+    hotkey_window.vars["quit"].set("F9")
+    result, _error = hotkey_window._collect()
+    assert result is not None
+    hotkey_window._cancel()
     errors = []
 
     def report(exc, value, tb):

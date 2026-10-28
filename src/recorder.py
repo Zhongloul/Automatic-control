@@ -5,7 +5,7 @@ from collections import deque
 from ctypes import wintypes
 from pathlib import Path
 
-from .input import resolve_key
+from .input import VK_MAP, resolve_key
 from .keyframes import (
     FrameStore,
     estimate_threshold,
@@ -19,6 +19,7 @@ from .session_store import append_event, create_session, load_events, save_event
 
 MOUSE_VKS = {"left": 0x01, "right": 0x02, "middle": 0x04}
 ACTION_TYPES = {"key_down", "key_up", "mouse_down", "mouse_up"}
+RECORD_ALL_ALIASES = {"shift", "ctrl", "alt", "return", "control", "escape", "del", "menu", "win"}
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
@@ -46,10 +47,19 @@ class InputRecorder:
         self.frame_max_width = max(64, int(recorder_cfg.get("frame_max_width", 480) or 480))
         self.keys = []
         self.key_vks = {}
+        hotkey_keys = {
+            str(value).strip().lower()
+            for value in (config.get("hotkeys") or {}).values()
+        }
+        record_all = bool(recorder_cfg.get("record_all_keys", True))
+        if record_all:
+            source_keys = [key for key in VK_MAP if key not in RECORD_ALL_ALIASES]
+        else:
+            source_keys = recorder_cfg.get("keys") or []
         seen = set()
-        for name in recorder_cfg.get("keys") or []:
+        for name in source_keys:
             key = str(name).strip().lower()
-            if not key or key in seen:
+            if not key or key in seen or key in hotkey_keys:
                 continue
             try:
                 vk, _scan, _extended = resolve_key(key)
